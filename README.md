@@ -97,6 +97,7 @@ make ci-local
 
 Release packaging outputs include:
 - `tar.gz` bundle
+- `tar.zst` bundle
 - `.deb` package for APT-based systems
 - `.rpm` package for DNF/YUM-based systems
 - `.pkg.tar.zst` package for Pacman-based systems
