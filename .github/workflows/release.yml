@@ -1,0 +1,510 @@
+name: forgeiso-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver release version (X.Y.Z). Optional for manual dry-runs."
+        required: false
+        type: string
+
+concurrency:
+  group: forgeiso-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release_gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          elif [[ -n "${INPUT_VERSION}" ]]; then
+            version="${INPUT_VERSION#v}"
+            tag="v${version}"
+          else
+            version="$(grep -m1 '^version = ' gui/src-tauri/Cargo.toml | cut -d'"' -f2)"
+            tag="v${version}"
+          fi
+
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version '${version}'. Expected X.Y.Z." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Release version: ${version}"
+
+      - name: Ensure release commit is on main
+        run: |
+          git fetch origin main
+          if ! git branch -r --contains "${GITHUB_SHA}" | grep -q "origin/main"; then
+            echo "Release commit ${GITHUB_SHA} is not reachable from origin/main." >&2
+            exit 1
+          fi
+
+      - name: Verify CI workflow succeeded for release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f event=push \
+              -f status=completed \
+              -f per_page=100 \
+              --jq ".workflow_runs[] | select(.head_sha == \"${GITHUB_SHA}\" and .head_branch == \"main\") | .id" \
+              | head -n1
+          )"
+
+          if [[ -z "${run_id}" ]]; then
+            echo "No completed forgeiso-ci workflow found for ${GITHUB_SHA} on main." >&2
+            exit 1
+          fi
+
+          conclusion="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.conclusion')"
+          if [[ "${conclusion}" != "success" ]]; then
+            echo "forgeiso-ci run ${run_id} concluded '${conclusion}', expected 'success'." >&2
+            exit 1
+          fi
+
+  build_linux_binaries:
+    name: Build Linux Binaries
+    runs-on: ubuntu-22.04
+    needs: release_gate
+    env:
+      VERSION: ${{ needs.release_gate.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libssl-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            gui/src-tauri/target
+          key: release-cargo-linux-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Rust CLI/TUI
+        run: cargo build --release -p forgeiso-cli -p forgeiso-tui
+
+      - name: Build Go agent
+        run: |
+          cd agent
+          go build -trimpath -ldflags="-s -w" -o ../target/release/forgeiso-agent ./cmd/forgeiso-agent
+
+      - name: Build GUI backend/frontend
+        run: |
+          cd gui
+          npm ci
+          npm run build
+          cd src-tauri
+          cargo build --release
+
+      - name: Stage Linux binaries
+        run: |
+          out_dir="dist/artifacts/linux-x86_64"
+          mkdir -p "${out_dir}"
+          cp target/release/forgeiso "${out_dir}/forgeiso"
+          cp target/release/forgeiso-tui "${out_dir}/forgeiso-tui"
+          cp target/release/forgeiso-agent "${out_dir}/forgeiso-agent"
+          cp gui/src-tauri/target/release/forgeiso-gui "${out_dir}/forgeiso-gui"
+          {
+            echo "version=${VERSION}"
+            echo "commit=${GITHUB_SHA}"
+            echo "platform=linux-x86_64"
+            date -u +"built_at=%Y-%m-%dT%H:%M:%SZ"
+          } > "${out_dir}/BUILD-INFO.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-binaries-linux-x86_64
+          path: dist/artifacts/linux-x86_64/*
+          if-no-files-found: error
+
+  build_cross_platform_binaries:
+    name: Build ${{ matrix.platform }} Binaries
+    runs-on: ${{ matrix.runner }}
+    needs: release_gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x86_64
+            runner: windows-2022
+            exe_suffix: ".exe"
+          - platform: macos-x86_64
+            runner: macos-13
+            exe_suffix: ""
+          - platform: macos-arm64
+            runner: macos-14
+            exe_suffix: ""
+    env:
+      VERSION: ${{ needs.release_gate.outputs.version }}
+      EXE_SUFFIX: ${{ matrix.exe_suffix }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            gui/src-tauri/target
+          key: release-cargo-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Rust CLI/TUI
+        run: cargo build --release -p forgeiso-cli -p forgeiso-tui
+
+      - name: Build Go agent
+        run: |
+          cd agent
+          go build -trimpath -ldflags="-s -w" -o ../target/release/forgeiso-agent${EXE_SUFFIX} ./cmd/forgeiso-agent
+
+      - name: Build GUI backend/frontend
+        run: |
+          cd gui
+          npm ci
+          npm run build
+          cd src-tauri
+          cargo build --release
+
+      - name: Stage platform binaries
+        run: |
+          out_dir="dist/artifacts/${{ matrix.platform }}"
+          mkdir -p "${out_dir}"
+          cp "target/release/forgeiso${EXE_SUFFIX}" "${out_dir}/forgeiso${EXE_SUFFIX}"
+          cp "target/release/forgeiso-tui${EXE_SUFFIX}" "${out_dir}/forgeiso-tui${EXE_SUFFIX}"
+          cp "target/release/forgeiso-agent${EXE_SUFFIX}" "${out_dir}/forgeiso-agent${EXE_SUFFIX}"
+          cp "gui/src-tauri/target/release/forgeiso-gui${EXE_SUFFIX}" "${out_dir}/forgeiso-gui${EXE_SUFFIX}"
+          {
+            echo "version=${VERSION}"
+            echo "commit=${GITHUB_SHA}"
+            echo "platform=${{ matrix.platform }}"
+            date -u +"built_at=%Y-%m-%dT%H:%M:%SZ"
+          } > "${out_dir}/BUILD-INFO.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-binaries-${{ matrix.platform }}
+          path: dist/artifacts/${{ matrix.platform }}/*
+          if-no-files-found: error
+
+  package_linux:
+    name: Package Linux (${{ matrix.format }})
+    runs-on: ubuntu-latest
+    needs:
+      - release_gate
+      - build_linux_binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: tar-gz
+            apt_packages: ""
+          - format: tar-zst
+            apt_packages: "zstd"
+          - format: deb
+            apt_packages: "dpkg-dev"
+          - format: rpm
+            apt_packages: "rpm"
+          - format: pacman
+            apt_packages: "ruby-full libarchive-tools"
+    env:
+      VERSION: ${{ needs.release_gate.outputs.version }}
+      FORGEISO_BIN_DIR: ${{ github.workspace }}/dist/input/linux-x86_64
+      FORGEISO_RELEASE_DIR: ${{ github.workspace }}/dist/release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: forgeiso-binaries-linux-x86_64
+          path: dist/input/linux-x86_64
+
+      - name: Install package dependencies
+        if: matrix.apt_packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - name: Install fpm
+        if: matrix.format == 'pacman'
+        run: sudo gem install --no-document fpm
+
+      - name: Prepare clean release directory
+        run: scripts/release/clean-release-dir.sh
+
+      - name: Build package
+        run: |
+          case "${{ matrix.format }}" in
+            tar-gz)
+              scripts/release/package-tarball.sh "${VERSION}"
+              ;;
+            tar-zst)
+              scripts/release/package-zstd.sh "${VERSION}"
+              ;;
+            deb)
+              scripts/release/package-deb.sh "${VERSION}"
+              ;;
+            rpm)
+              scripts/release/package-rpm.sh "${VERSION}" "1"
+              ;;
+            pacman)
+              scripts/release/package-pacman.sh "${VERSION}"
+              ;;
+            *)
+              echo "unknown package format: ${{ matrix.format }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-package-${{ matrix.format }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  build_package_repos:
+    name: Build Package Repositories
+    runs-on: ubuntu-latest
+    needs:
+      - release_gate
+      - package_linux
+    env:
+      VERSION: ${{ needs.release_gate.outputs.version }}
+      FORGEISO_RELEASE_DIR: ${{ github.workspace }}/dist/release
+      FORGEISO_REPOS_DIR: ${{ github.workspace }}/dist/repos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install repository tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            apt-utils \
+            dpkg-dev \
+            createrepo-c \
+            gnupg
+          if apt-cache show pacman-package-manager >/dev/null 2>&1; then
+            sudo apt-get install -y pacman-package-manager
+          else
+            sudo apt-get install -y pacman
+          fi
+
+      - name: Prepare clean release directory
+        run: scripts/release/clean-release-dir.sh
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: forgeiso-package-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Build repository metadata
+        run: scripts/release/build-repos.sh "${VERSION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-package-repos
+          path: dist/release/forgeiso-repos-${{ env.VERSION }}.tar.gz
+          if-no-files-found: error
+
+  assemble_release:
+    name: Assemble Clean Release
+    runs-on: ubuntu-latest
+    needs:
+      - release_gate
+      - build_linux_binaries
+      - build_cross_platform_binaries
+      - package_linux
+      - build_package_repos
+    env:
+      VERSION: ${{ needs.release_gate.outputs.version }}
+      TAG: ${{ needs.release_gate.outputs.tag }}
+      FORGEISO_RELEASE_DIR: ${{ github.workspace }}/dist/release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare clean release directory
+        run: scripts/release/clean-release-dir.sh
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: forgeiso-package-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Download platform binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: forgeiso-binaries-*
+          path: dist/binaries
+
+      - name: Create portable platform bundles
+        run: |
+          shopt -s nullglob
+          for artifact_dir in dist/binaries/forgeiso-binaries-*; do
+            platform="${artifact_dir##dist/binaries/forgeiso-binaries-}"
+            if [[ "${platform}" == windows-* ]]; then
+              (
+                cd "${artifact_dir}"
+                zip -9 -q -r "${GITHUB_WORKSPACE}/dist/release/forgeiso-binaries-${VERSION}-${platform}.zip" .
+              )
+            else
+              tar -C "${artifact_dir}" -czf "dist/release/forgeiso-binaries-${VERSION}-${platform}.tar.gz" .
+            fi
+          done
+          shopt -u nullglob
+
+      - name: Generate checksums
+        run: |
+          find dist/release -maxdepth 1 -type f \
+            ! -name checksums.txt \
+            ! -name release-manifest.json \
+            -printf '%f\n' | sort > /tmp/forgeiso-release-files.txt
+
+          if [[ ! -s /tmp/forgeiso-release-files.txt ]]; then
+            echo "No release files found to checksum." >&2
+            exit 1
+          fi
+
+          : > dist/release/checksums.txt
+          while IFS= read -r file; do
+            sha256sum "dist/release/${file}" >> dist/release/checksums.txt
+          done < /tmp/forgeiso-release-files.txt
+
+      - name: Generate release manifest
+        run: |
+          artifacts_json="$(
+            while IFS= read -r file; do
+              size_bytes="$(stat -c '%s' "dist/release/${file}")"
+              sha256="$(sha256sum "dist/release/${file}" | awk '{print $1}')"
+              jq -n \
+                --arg file "${file}" \
+                --arg sha256 "${sha256}" \
+                --argjson size_bytes "${size_bytes}" \
+                '{file: $file, sha256: $sha256, size_bytes: $size_bytes}'
+            done < /tmp/forgeiso-release-files.txt | jq -s '.'
+          )"
+
+          jq -n \
+            --arg version "${VERSION}" \
+            --arg tag "${TAG}" \
+            --arg commit "${GITHUB_SHA}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson artifacts "${artifacts_json}" \
+            '{version: $version, tag: $tag, commit: $commit, built_at: $built_at, artifacts: $artifacts}' \
+            > dist/release/release-manifest.json
+
+      - name: Verify clean release bundle
+        run: scripts/release/verify-release.sh "${VERSION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-release-bundle
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs:
+      - release_gate
+      - assemble_release
+    permissions:
+      contents: write
+    steps:
+      - name: Download final release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: forgeiso-release-bundle
+          path: dist/release
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release_gate.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/release/*

@@ -24,6 +24,10 @@ The release workflow builds and publishes:
 - `forgeiso-tui` binary
 - `forgeiso-agent` binary
 - GUI build artifact (platform dependent)
+- `forgeiso-binaries-<version>-linux-x86_64.tar.gz`
+- `forgeiso-binaries-<version>-windows-x86_64.zip`
+- `forgeiso-binaries-<version>-macos-x86_64.tar.gz`
+- `forgeiso-binaries-<version>-macos-arm64.tar.gz`
 - `forgeiso-<version>-linux-x86_64.tar.gz`
 - `forgeiso-<version>-linux-x86_64.tar.zst`
 - `forgeiso_<version>_amd64.deb` (APT)
@@ -31,6 +35,15 @@ The release workflow builds and publishes:
 - `forgeiso-<version>-1-x86_64.pkg.tar.zst` (Pacman)
 - `forgeiso-repos-<version>.tar.gz` (apt/dnf/pacman repository metadata)
 - SHA256 checksums
+- `release-manifest.json` (artifact inventory with hashes/sizes)
+
+Release workflow implementation:
+- CI gates: `.github/workflows/ci.yml`
+- Tag release matrix: `.github/workflows/release.yml`
+- Gate checks require the tagged commit to be on `main` and to have a successful CI run.
+- Linux packaging is matrix-parallel (`tar.gz`, `tar.zst`, `deb`, `rpm`, `pacman`) from one Linux binary build.
+- Platform binaries are built in parallel for Linux/Windows/macOS and bundled into release artifacts.
+- Final assembly performs clean-release verification before publish.
 
 ## Install commands from release artifacts
 
@@ -58,6 +71,12 @@ Output directories:
 - `dist/repos/rpm`
 - `dist/repos/pacman`
 - `dist/release/forgeiso-repos-<version>.tar.gz`
+
+To keep local packaging clean, start with:
+
+```bash
+scripts/release/clean-release-dir.sh
+```
 
 Optional signing:
 - Set `FORGEISO_GPG_KEY_ID=<key-id>` before running scripts to emit detached signatures and apt signed indexes.

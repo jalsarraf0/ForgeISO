@@ -18,12 +18,13 @@ build:
 	@echo "GUI build: cd gui && npm ci && npm run build"
 
 release:
-	@echo "Release workflow is tag-driven via .github/workflows/ci.yml"
+	@echo "Release workflow is tag-driven via .github/workflows/release.yml"
 	@echo "Use: git tag vX.Y.Z && git push origin vX.Y.Z"
 
 package:
 	@echo "Packaging requires release binaries in target/release"
 	@echo "Running package scripts for tar.gz, tar.zst, RPM, DEB, and Pacman"
+	scripts/release/clean-release-dir.sh
 	scripts/release/package-tarball.sh
 	scripts/release/package-zstd.sh
 	scripts/release/package-rpm.sh
