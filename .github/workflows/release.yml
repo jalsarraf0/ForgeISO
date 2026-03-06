@@ -275,7 +275,7 @@ jobs:
           - format: rpm
             apt_packages: "rpm"
           - format: pacman
-            apt_packages: "ruby-full"
+            apt_packages: "ruby-full libarchive-tools"
     env:
       VERSION: ${{ needs.release_gate.outputs.version }}
       FORGEISO_BIN_DIR: ${{ github.workspace }}/dist/input/linux-x86_64
