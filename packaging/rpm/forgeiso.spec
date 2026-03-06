@@ -39,5 +39,5 @@ install -m 0644 LICENSE %{buildroot}%{_datadir}/doc/%{name}/LICENSE
 %license %{_datadir}/doc/%{name}/LICENSE
 
 %changelog
-* Fri Mar 06 2026 Jamal Al-Sarraf <19882582+jalsarraf0@users.noreply.github.com> - 0.1.0-1
+* Thu Mar 05 2026 Jamal Al-Sarraf <19882582+jalsarraf0@users.noreply.github.com> - 0.1.0-1
 - Initial ForgeISO release package

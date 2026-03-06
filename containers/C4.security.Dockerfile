@@ -26,11 +26,11 @@ RUN set -eux; \
       done; \
       return 1; \
     }; \
-    fetch_script "https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh" /tmp/install-trivy.sh; \
+    fetch_script "https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_VERSION}/contrib/install.sh" /tmp/install-trivy.sh; \
     sh /tmp/install-trivy.sh -b /usr/local/bin "${TRIVY_VERSION}"; \
-    fetch_script "https://raw.githubusercontent.com/anchore/syft/main/install.sh" /tmp/install-syft.sh; \
+    fetch_script "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" /tmp/install-syft.sh; \
     sh /tmp/install-syft.sh -b /usr/local/bin "${SYFT_VERSION}"; \
-    if fetch_script "https://raw.githubusercontent.com/anchore/grype/main/install.sh" /tmp/install-grype.sh \
+    if fetch_script "https://raw.githubusercontent.com/anchore/grype/${GRYPE_VERSION}/install.sh" /tmp/install-grype.sh \
       && sh /tmp/install-grype.sh -b /usr/local/bin "${GRYPE_VERSION}"; then \
       echo "Installed grype ${GRYPE_VERSION}"; \
     else \
