@@ -1,43 +1,26 @@
 # ForgeISO Architecture
 
-Author: Jamal Al-Sarraf
+## Current model
 
-## System overview
+ForgeISO is a Linux-only, bare-metal ISO remastering tool.
 
-ForgeISO is a multi-interface product that routes all build logic through a single Rust engine:
-- CLI (`forgeiso`) for automation
-- TUI (`forgeiso-tui`) for terminal workflows
-- GUI (Tauri + React) for desktop-first operation
-- Optional remote agent (`forgeiso-agent`) for Linux-hosted build and VM execution
+All product workflows run locally through the Rust engine:
+- CLI for automation
+- TUI for terminal operators
+- GUI for desktop users
+
+There is no product-side server process, remote agent, or container runtime dependency.
 
 ## Engine responsibilities
 
-- Parse and validate build configuration
-- Enforce distro release policy
-- Select container runtime (Docker preferred, Podman fallback)
-- Generate distro-specific backend execution plans
-- Execute containerized build/scan/test stages
-- Emit structured events for live log streaming
-- Produce JSON/HTML reports with provenance and security summaries
+- Resolve an ISO source from a local path or user-provided URL
+- Inspect the ISO and detect distro metadata from the image itself
+- Validate local host prerequisites
+- Extract and repack supported Linux ISO layouts with local tools
+- Apply local overlay content into the ISO or unpacked rootfs
+- Run local scan, test, and report steps
+- Emit structured events for UI logging
 
-## Distro backend strategy
+## CI/CD boundary
 
-- Ubuntu LTS and Mint LTS remaster pipeline:
-  - ISO extraction
-  - rootfs unpack/edit/repack
-  - BIOS/UEFI compatible ISO repack path
-- Fedora stable pipeline:
-  - kickstart generation
-  - `livemedia-creator` orchestration
-  - lifecycle warning insertion
-- Arch rolling pipeline:
-  - archiso profile generation
-  - package list + rootfs injection
-
-## Security and policy model
-
-- Unsafe operations are gated by explicit dangerous mode
-- Host command execution is disabled by default
-- Secrets strict mode can fail build
-- Severity gates enforce vulnerability thresholds
-- Reports include artifact traceability metadata
+CI may still use ephemeral containers for repeatable pipeline stages. Those containers are not part of the shipped product workflow.

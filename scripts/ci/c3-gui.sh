@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /workspace/gui
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT_DIR/gui"
 
-npm ci
+offline_flag=()
+if [[ "${CI:-false}" != "true" ]]; then
+  offline_flag+=(--offline)
+fi
+
+if [[ ! -d node_modules ]]; then
+  if [[ "${CI:-false}" == "true" ]]; then
+    npm ci
+  else
+    npm ci --offline
+  fi
+fi
 npm run lint
 npm run build
 
-cd /workspace/gui/src-tauri
-cargo check
+cd "$ROOT_DIR/gui/src-tauri"
+cargo check "${offline_flag[@]}"

@@ -2,20 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-const steps = [
-  'Distro',
-  'Release',
-  'Profile',
-  'Customize',
-  'Security',
-  'Review',
-  'Build',
-  'Test',
-  'Export',
-] as const;
-
-type Distro = 'ubuntu' | 'mint' | 'fedora' | 'arch';
-
 type LogEntry = {
   ts: string;
   phase: string;
@@ -23,36 +9,60 @@ type LogEntry = {
   message: string;
 };
 
+type Inspection = {
+  source_path: string;
+  source_kind: string;
+  source_value: string;
+  size_bytes: number;
+  sha256: string;
+  volume_id?: string | null;
+  distro?: string | null;
+  release?: string | null;
+  edition?: string | null;
+  architecture?: string | null;
+  warnings: string[];
+};
+
+type BuildResult = {
+  output_dir: string;
+  report_json: string;
+  report_html: string;
+  artifacts: string[];
+};
+
+const profiles = [
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'desktop', label: 'Desktop' },
+] as const;
+
 export function App() {
-  const [currentStep, setCurrentStep] = useState(0);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [distro, setDistro] = useState<Distro>('ubuntu');
-  const [release, setRelease] = useState('24.04');
-  const [profile, setProfile] = useState('hardened_server');
-  const [packageSearch, setPackageSearch] = useState('');
-  const [agentEndpoint, setAgentEndpoint] = useState('');
-  const [agentConnected, setAgentConnected] = useState(false);
+  const [source, setSource] = useState('');
+  const [outputDir, setOutputDir] = useState('./artifacts');
+  const [buildName, setBuildName] = useState('forgeiso-local');
+  const [overlayDir, setOverlayDir] = useState('');
+  const [outputLabel, setOutputLabel] = useState('');
+  const [profile, setProfile] = useState('minimal');
+  const [doctor, setDoctor] = useState<any>(null);
+  const [inspection, setInspection] = useState<Inspection | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('Ready');
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  const [lastIso, setLastIso] = useState('');
+  const [lastBuildDir, setLastBuildDir] = useState('');
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
-    const run = async () => {
+    const start = async () => {
       unlisten = await listen<LogEntry>('forgeiso-log', (event) => {
-        setLogs((prev) => [...prev.slice(-299), event.payload]);
+        setLogs((prev) => [...prev.slice(-199), event.payload]);
       });
       await invoke('start_event_stream');
+      const report = await invoke('doctor');
+      setDoctor(report);
     };
 
-    run().catch((error) => {
-      setStatus(`Failed to start log stream: ${error}`);
-    });
+    start().catch((error) => setStatus(`Startup failed: ${error}`));
 
     return () => {
       if (unlisten) {
@@ -61,19 +71,21 @@ export function App() {
     };
   }, []);
 
-  const stepTitle = useMemo(() => steps[currentStep], [currentStep]);
+  const canBuild = useMemo(() => source.trim().length > 0 && outputDir.trim().length > 0, [source, outputDir]);
 
-  const nextStep = () => setCurrentStep((s) => Math.min(s + 1, steps.length - 1));
-  const prevStep = () => setCurrentStep((s) => Math.max(s - 1, 0));
-
-  const runDoctor = async () => {
+  const inspect = async () => {
+    if (!source.trim()) {
+      setStatus('Source is required');
+      return;
+    }
     setBusy(true);
-    setStatus('Running doctor...');
+    setStatus('Inspecting source ISO...');
     try {
-      const result = await invoke('doctor');
-      setStatus(`Doctor complete: ${JSON.stringify(result).slice(0, 140)}...`);
+      const value = await invoke<Inspection>('inspect_source', { source });
+      setInspection(value);
+      setStatus('Inspection completed');
     } catch (error) {
-      setStatus(`Doctor failed: ${error}`);
+      setStatus(`Inspection failed: ${error}`);
     } finally {
       setBusy(false);
     }
@@ -81,18 +93,21 @@ export function App() {
 
   const build = async () => {
     setBusy(true);
-    setStatus('Building ISO...');
+    setStatus('Building local ISO...');
     try {
-      await invoke('build_from_inline', {
+      const result = await invoke<BuildResult>('build_local', {
         request: {
-          name: 'gui-build',
-          distro,
-          release,
+          source,
+          outputDir,
+          name: buildName,
+          overlayDir,
+          outputLabel,
           profile,
         },
       });
-      setStatus('Build completed');
-      setCurrentStep(6);
+      setLastIso(result.artifacts[0] ?? '');
+      setLastBuildDir(result.output_dir);
+      setStatus(`Build completed: ${result.artifacts[0] ?? result.output_dir}`);
     } catch (error) {
       setStatus(`Build failed: ${error}`);
     } finally {
@@ -100,119 +115,149 @@ export function App() {
     }
   };
 
-  const toggleAgent = async () => {
+  const scan = async () => {
+    if (!lastIso) {
+      setStatus('Build an ISO before scanning');
+      return;
+    }
+    setBusy(true);
+    setStatus('Running local scans...');
     try {
-      if (agentConnected) {
-        await invoke('disconnect_agent');
-        setAgentConnected(false);
-        setStatus('Remote agent disconnected');
-      } else {
-        await invoke('connect_agent', { endpoint: agentEndpoint });
-        setAgentConnected(true);
-        setStatus('Remote agent connected');
-      }
+      const result = await invoke<any>('scan_artifact', { artifact: lastIso });
+      setStatus(`Scan completed: ${result.report_json}`);
     } catch (error) {
-      setStatus(`Agent error: ${error}`);
+      setStatus(`Scan failed: ${error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testIso = async () => {
+    if (!lastIso) {
+      setStatus('Build an ISO before testing');
+      return;
+    }
+    setBusy(true);
+    setStatus('Running local BIOS/UEFI smoke tests...');
+    try {
+      const result = await invoke<any>('test_iso', { iso: lastIso, bios: true, uefi: true });
+      setStatus(`Test completed: passed=${result.passed}`);
+    } catch (error) {
+      setStatus(`Test failed: ${error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const renderReport = async (format: 'html' | 'json') => {
+    if (!lastBuildDir) {
+      setStatus('Build an ISO before rendering a report');
+      return;
+    }
+    setBusy(true);
+    setStatus(`Rendering ${format} report...`);
+    try {
+      const path = await invoke<string>('render_report', { buildDir: lastBuildDir, format });
+      setStatus(`Report written to ${path}`);
+    } catch (error) {
+      setStatus(`Report failed: ${error}`);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header className="hero">
         <div>
           <h1>ForgeISO</h1>
-          <p className="subtitle">Enterprise ISO customization studio</p>
+          <p>Create Linux ISOs locally on bare metal. No agents, no endpoints, no Docker runtime.</p>
         </div>
-        <div className="topbar-actions">
-          <button className="ghost" onClick={runDoctor} disabled={busy}>Doctor</button>
-          <button className="ghost" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            Theme: {theme}
-          </button>
+        <div className="doctor-card">
+          <h2>Doctor</h2>
+          <p>{doctor ? `${doctor.host_os} / ${doctor.host_arch}` : 'Loading...'}</p>
+          <p>{doctor?.linux_supported ? 'Linux build support enabled' : 'Linux host required for builds'}</p>
         </div>
       </header>
 
-      <section className="wizard-track">
-        {steps.map((label, index) => (
-          <button
-            key={label}
-            className={`step-pill ${index === currentStep ? 'active' : ''} ${index < currentStep ? 'done' : ''}`}
-            onClick={() => setCurrentStep(index)}
-          >
-            <span>{index + 1}</span>
-            {label}
-          </button>
-        ))}
-      </section>
-
-      <main className="content-grid">
-        <section className="panel form-panel">
-          <h2>{stepTitle}</h2>
+      <main className="layout">
+        <section className="panel">
+          <h2>Local Workflow</h2>
           <div className="field-grid">
             <label>
-              Distro
-              <select value={distro} onChange={(e) => setDistro(e.target.value as Distro)}>
-                <option value="ubuntu">Ubuntu (LTS only)</option>
-                <option value="mint">Linux Mint (LTS only)</option>
-                <option value="fedora">Fedora (latest stable, non-LTS)</option>
-                <option value="arch">Arch (rolling snapshot)</option>
-              </select>
+              Source ISO path or URL
+              <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="/path/to/base.iso or https://example/distro.iso" />
             </label>
             <label>
-              Release
-              <input value={release} onChange={(e) => setRelease(e.target.value)} />
+              Output directory
+              <input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} placeholder="./artifacts" />
+            </label>
+            <label>
+              Build name
+              <input value={buildName} onChange={(e) => setBuildName(e.target.value)} />
+            </label>
+            <label>
+              Overlay directory
+              <input value={overlayDir} onChange={(e) => setOverlayDir(e.target.value)} placeholder="Optional local file overlay" />
+            </label>
+            <label>
+              Output label
+              <input value={outputLabel} onChange={(e) => setOutputLabel(e.target.value)} placeholder="Optional ISO volume label" />
             </label>
             <label>
               Profile
               <select value={profile} onChange={(e) => setProfile(e.target.value)}>
-                <option value="hardened_server">Hardened Server</option>
-                <option value="developer_workstation">Developer Workstation</option>
-                <option value="minimal">Minimal</option>
-                <option value="kiosk">Kiosk</option>
-                <option value="gaming">Gaming</option>
+                {profiles.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
               </select>
             </label>
-            <label>
-              Package Search
-              <input
-                placeholder="Search mapped packages and bundles"
-                value={packageSearch}
-                onChange={(e) => setPackageSearch(e.target.value)}
-              />
-            </label>
-            <label>
-              Remote Agent Endpoint
-              <input
-                placeholder="https://linux-agent.internal:7443"
-                value={agentEndpoint}
-                onChange={(e) => setAgentEndpoint(e.target.value)}
-              />
-            </label>
-            <div className="inline-actions">
-              <button className="ghost" onClick={toggleAgent}>
-                {agentConnected ? 'Disconnect Agent' : 'Connect Agent'}
-              </button>
-            </div>
           </div>
 
-          <div className="step-actions">
-            <button className="ghost" disabled={currentStep === 0} onClick={prevStep}>Back</button>
-            <button className="ghost" disabled={currentStep === steps.length - 1} onClick={nextStep}>Next</button>
-            <button className="primary" disabled={busy} onClick={build}>Build</button>
+          <div className="actions">
+            <button className="ghost" onClick={inspect} disabled={busy || !source.trim()}>Inspect</button>
+            <button className="primary" onClick={build} disabled={busy || !canBuild}>Build ISO</button>
+            <button className="ghost" onClick={scan} disabled={busy || !lastIso}>Scan</button>
+            <button className="ghost" onClick={testIso} disabled={busy || !lastIso}>Test</button>
+            <button className="ghost" onClick={() => renderReport('html')} disabled={busy || !lastBuildDir}>HTML Report</button>
+            <button className="ghost" onClick={() => renderReport('json')} disabled={busy || !lastBuildDir}>JSON Report</button>
           </div>
+
+          <p className="status">{status}</p>
         </section>
 
-        <section className="panel logs-panel">
-          <h2>Live Logs</h2>
+        <section className="panel">
+          <h2>Detected ISO</h2>
+          {inspection ? (
+            <dl className="inspection-grid">
+              <div><dt>Cached path</dt><dd>{inspection.source_path}</dd></div>
+              <div><dt>Distro</dt><dd>{inspection.distro ?? 'unknown'}</dd></div>
+              <div><dt>Release</dt><dd>{inspection.release ?? 'unknown'}</dd></div>
+              <div><dt>Architecture</dt><dd>{inspection.architecture ?? 'unknown'}</dd></div>
+              <div><dt>Volume ID</dt><dd>{inspection.volume_id ?? 'unknown'}</dd></div>
+              <div><dt>SHA-256</dt><dd className="mono">{inspection.sha256}</dd></div>
+            </dl>
+          ) : (
+            <p className="muted">Inspect a local ISO path or download URL to populate detected fields.</p>
+          )}
+          {inspection?.warnings?.length ? (
+            <div className="warnings">
+              {inspection.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="panel span-2">
+          <h2>Operation Log</h2>
           <div className="log-console">
-            {logs.length === 0 ? <p className="muted">Waiting for engine events...</p> : null}
-            {logs.map((entry, idx) => (
-              <p key={`${entry.ts}-${idx}`}>
-                <span className="muted">[{entry.ts}]</span> <span className="badge">{entry.phase}</span>{' '}
-                <span className={`level-${entry.level.toLowerCase()}`}>{entry.level}</span> {entry.message}
+            {logs.length === 0 ? <p className="muted">Waiting for local engine events...</p> : null}
+            {logs.map((entry, index) => (
+              <p key={`${entry.ts}-${index}`}>
+                <span className="mono">[{entry.ts}]</span> <span className="badge">{entry.phase}</span> {entry.message}
               </p>
             ))}
           </div>
-          <p className="status">{status}</p>
+          {lastIso ? <p className="status">Last ISO: {lastIso}</p> : null}
         </section>
       </main>
     </div>

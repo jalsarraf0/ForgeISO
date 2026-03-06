@@ -6,13 +6,6 @@ services:
     command: ["bash", "-c", "scripts/ci/c1-rust.sh"]
     volumes:
       - .:/workspace
-  c2:
-    build:
-      context: .
-      dockerfile: containers/C2.go.Dockerfile
-    command: ["bash", "-c", "scripts/ci/c2-go.sh"]
-    volumes:
-      - .:/workspace
   c3:
     build:
       context: .

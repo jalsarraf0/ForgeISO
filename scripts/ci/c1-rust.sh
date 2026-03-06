@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /workspace
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT_DIR"
+
+offline_flag=()
+if [[ "${CI:-false}" != "true" ]]; then
+  offline_flag+=(--offline)
+fi
 
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets "${offline_flag[@]}" -- -D warnings
+cargo test --workspace "${offline_flag[@]}"

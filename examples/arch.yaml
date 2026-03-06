@@ -1,21 +1,4 @@
-name: arch-dev
-distro: arch
-release:
-  version: "2026.03.05"
-  base_iso_url: https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso
-profile: developer_workstation
-build_mode: latest
-runtime: docker
-users:
-  - username: jamal
-    display_name: Jamal Al-Sarraf
-    groups: [wheel]
-    sudo_policy: password
-    shell: /bin/bash
-    ssh_authorized_keys:
-      - ssh-ed25519 AAAAEXAMPLE jamal@forgeiso
-modules:
-  - type: packages
-    enabled: true
-    config:
-      install: [git, neovim, base-devel]
+name: arch-local
+source: /srv/isos/archlinux.iso
+overlay_dir: /srv/forgeiso/overlays/arch
+profile: minimal

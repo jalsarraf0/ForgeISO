@@ -1,21 +1,4 @@
-name: mint-kiosk
-distro: mint
-release:
-  version: "22"
-  base_iso_url: https://mirrors.edge.kernel.org/linuxmint/stable/22/linuxmint-22-cinnamon-64bit.iso
-profile: kiosk
-build_mode: pinned
-runtime: docker
-users:
-  - username: jamal
-    display_name: Jamal Al-Sarraf
-    groups: [sudo]
-    sudo_policy: password
-    shell: /bin/bash
-    ssh_authorized_keys:
-      - ssh-ed25519 AAAAEXAMPLE jamal@forgeiso
-modules:
-  - type: desktop
-    enabled: true
-    config:
-      wallpaper: /assets/wallpaper.jpg
+name: mint-local
+source: https://example.invalid/linuxmint.iso
+overlay_dir: /srv/forgeiso/overlays/mint
+profile: desktop

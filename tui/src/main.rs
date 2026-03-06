@@ -1,22 +1,21 @@
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use forgeiso_engine::ForgeIsoEngine;
+use forgeiso_engine::{BuildConfig, ForgeIsoEngine, IsoSource, ProfileKind};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Style, Stylize},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    text::Line,
+    widgets::{Block, Borders, Clear, Paragraph, Row, Table},
     Terminal,
 };
-
-const TAB_TITLES: [&str; 5] = ["Configure", "Build", "Scans", "Tests", "Reports"];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,49 +25,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
     let engine = ForgeIsoEngine::new();
-    let doctor = engine.doctor().await;
-    app.logs.push(format!(
-        "doctor completed at {} (docker={}, podman={})",
-        doctor.timestamp,
-        doctor
-            .runtime_candidates
-            .get("docker")
-            .copied()
-            .unwrap_or(false),
-        doctor
-            .runtime_candidates
-            .get("podman")
-            .copied()
-            .unwrap_or(false)
-    ));
-
+    let mut app = App::new(engine.doctor().await);
     let mut rx = engine.subscribe();
-    let mut done = false;
 
-    while !done {
+    loop {
         while let Ok(event) = rx.try_recv() {
-            app.logs
-                .push(format!("[{:?}] {}", event.phase, event.message));
-            if app.logs.len() > 200 {
-                app.logs.remove(0);
-            }
+            app.push_log(format!("[{:?}] {}", event.phase, event.message));
         }
 
         terminal.draw(|f| ui(f, &app))?;
 
-        if event::poll(Duration::from_millis(200))? {
+        if event::poll(Duration::from_millis(150))? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => done = true,
-                    KeyCode::Right => app.next_tab(),
-                    KeyCode::Left => app.previous_tab(),
-                    KeyCode::Char('d') => {
-                        app.logs
-                            .push("doctor command already executed in this session".to_string());
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if app.editing {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter => app.editing = false,
+                        KeyCode::Backspace => app.backspace(),
+                        KeyCode::Char(ch) => app.push_char(ch),
+                        _ => {}
                     }
-                    KeyCode::Char('c') => app.clear_logs(),
+                    continue;
+                }
+
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Up => app.previous_field(),
+                    KeyCode::Down => app.next_field(),
+                    KeyCode::Enter => app.editing = true,
+                    KeyCode::Char('i') => app.inspect(&engine).await,
+                    KeyCode::Char('b') => app.build(&engine).await,
+                    KeyCode::Char('s') => app.scan(&engine).await,
+                    KeyCode::Char('t') => app.test(&engine).await,
                     _ => {}
                 }
             }
@@ -81,38 +72,219 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Default)]
 struct App {
-    tab_index: usize,
+    selected_field: usize,
+    editing: bool,
+    source: String,
+    output_dir: String,
+    build_name: String,
+    overlay_dir: String,
+    profile: String,
+    inspection: Vec<String>,
     logs: Vec<String>,
+    status: String,
+    last_iso: Option<PathBuf>,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(doctor: forgeiso_engine::DoctorReport) -> Self {
+        let mut logs = Vec::new();
+        logs.push(format!(
+            "doctor: host={} arch={} linux_supported={}",
+            doctor.host_os, doctor.host_arch, doctor.linux_supported
+        ));
+        for (tool, available) in doctor.tooling {
+            logs.push(format!("tool {tool}: {available}"));
+        }
+
         Self {
-            tab_index: 0,
-            logs: vec![
-                "ForgeISO TUI initialized".to_string(),
-                "Shortcuts: Left/Right switch tabs, d doctor, c clear logs, q quit".to_string(),
-            ],
+            selected_field: 0,
+            editing: false,
+            source: String::new(),
+            output_dir: "./artifacts".to_string(),
+            build_name: "forgeiso-local".to_string(),
+            overlay_dir: String::new(),
+            profile: "minimal".to_string(),
+            inspection: vec!["No ISO inspected yet".to_string()],
+            logs,
+            status: "Ready".to_string(),
+            last_iso: None,
         }
     }
 
-    fn next_tab(&mut self) {
-        self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+    fn fields(&self) -> [(&str, &str); 5] {
+        [
+            ("Source", &self.source),
+            ("Output", &self.output_dir),
+            ("Name", &self.build_name),
+            ("Overlay", &self.overlay_dir),
+            ("Profile", &self.profile),
+        ]
     }
 
-    fn previous_tab(&mut self) {
-        if self.tab_index == 0 {
-            self.tab_index = TAB_TITLES.len() - 1;
+    fn next_field(&mut self) {
+        self.selected_field = (self.selected_field + 1) % self.fields().len();
+    }
+
+    fn previous_field(&mut self) {
+        if self.selected_field == 0 {
+            self.selected_field = self.fields().len() - 1;
         } else {
-            self.tab_index -= 1;
+            self.selected_field -= 1;
         }
     }
 
-    fn clear_logs(&mut self) {
-        self.logs.clear();
-        self.logs.push("logs cleared".to_string());
+    fn current_mut(&mut self) -> &mut String {
+        match self.selected_field {
+            0 => &mut self.source,
+            1 => &mut self.output_dir,
+            2 => &mut self.build_name,
+            3 => &mut self.overlay_dir,
+            _ => &mut self.profile,
+        }
+    }
+
+    fn push_char(&mut self, ch: char) {
+        self.current_mut().push(ch);
+    }
+
+    fn backspace(&mut self) {
+        self.current_mut().pop();
+    }
+
+    fn push_log(&mut self, line: String) {
+        self.logs.push(line);
+        if self.logs.len() > 12 {
+            self.logs.remove(0);
+        }
+    }
+
+    async fn inspect(&mut self, engine: &ForgeIsoEngine) {
+        if self.source.trim().is_empty() {
+            self.status = "Source is required".to_string();
+            return;
+        }
+        let cache = std::env::temp_dir().join("forgeiso-tui-inspect");
+        match engine.inspect_source(&self.source, Some(&cache)).await {
+            Ok(info) => {
+                self.inspection = vec![
+                    format!("Source path: {}", info.source_path.display()),
+                    format!(
+                        "Distro: {}",
+                        info.distro
+                            .map(|value| format!("{:?}", value))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    ),
+                    format!("Release: {}", info.release.as_deref().unwrap_or("unknown")),
+                    format!(
+                        "Architecture: {}",
+                        info.architecture.as_deref().unwrap_or("unknown")
+                    ),
+                    format!(
+                        "Volume ID: {}",
+                        info.volume_id.as_deref().unwrap_or("unknown")
+                    ),
+                ];
+                self.status = "Inspection completed".to_string();
+            }
+            Err(error) => {
+                self.status = format!("Inspect failed: {error}");
+            }
+        }
+    }
+
+    async fn build(&mut self, engine: &ForgeIsoEngine) {
+        let cfg = match self.build_config() {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let out_dir = PathBuf::from(&self.output_dir);
+        match engine.build(&cfg, &out_dir).await {
+            Ok(result) => {
+                self.last_iso = result.artifacts.first().cloned();
+                self.status = format!("Build completed: {}", result.artifacts[0].display());
+                self.inspection = vec![
+                    format!("Built ISO: {}", result.artifacts[0].display()),
+                    format!("Report JSON: {}", result.report_json.display()),
+                    format!("Report HTML: {}", result.report_html.display()),
+                ];
+            }
+            Err(error) => {
+                self.status = format!("Build failed: {error}");
+            }
+        }
+    }
+
+    async fn scan(&mut self, engine: &ForgeIsoEngine) {
+        let Some(artifact) = self.last_iso.clone() else {
+            self.status = "Build an ISO before running scan".to_string();
+            return;
+        };
+        let out = artifact
+            .parent()
+            .map(|path| path.join("scan"))
+            .unwrap_or_else(|| PathBuf::from("scan"));
+        match engine.scan(&artifact, None, &out).await {
+            Ok(result) => {
+                self.status = format!("Scan completed: {}", result.report_json.display());
+            }
+            Err(error) => {
+                self.status = format!("Scan failed: {error}");
+            }
+        }
+    }
+
+    async fn test(&mut self, engine: &ForgeIsoEngine) {
+        let Some(artifact) = self.last_iso.clone() else {
+            self.status = "Build an ISO before running tests".to_string();
+            return;
+        };
+        let out = artifact
+            .parent()
+            .map(|path| path.join("test"))
+            .unwrap_or_else(|| PathBuf::from("test"));
+        match engine.test_iso(&artifact, true, true, &out).await {
+            Ok(result) => {
+                self.status = format!("Test completed: passed={}", result.passed);
+            }
+            Err(error) => {
+                self.status = format!("Test failed: {error}");
+            }
+        }
+    }
+
+    fn build_config(&self) -> Result<BuildConfig, String> {
+        if self.source.trim().is_empty() {
+            return Err("Source is required".to_string());
+        }
+
+        let overlay_dir = if self.overlay_dir.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(self.overlay_dir.trim()))
+        };
+
+        let profile = match self.profile.trim() {
+            "minimal" => ProfileKind::Minimal,
+            "desktop" => ProfileKind::Desktop,
+            other => return Err(format!("Unsupported profile '{other}'")),
+        };
+
+        Ok(BuildConfig {
+            name: self.build_name.clone(),
+            source: IsoSource::from_raw(self.source.clone()),
+            overlay_dir,
+            output_label: None,
+            profile,
+            auto_scan: false,
+            auto_test: false,
+            scanning: Default::default(),
+            testing: Default::default(),
+            keep_workdir: false,
+        })
     }
 }
 
@@ -120,59 +292,94 @@ fn ui(frame: &mut ratatui::Frame<'_>, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(9),
+            Constraint::Length(9),
             Constraint::Min(8),
-            Constraint::Length(10),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
-    render_tabs(frame, chunks[0], app);
-    render_main(frame, chunks[1], app);
-    render_logs(frame, chunks[2], app);
-}
-
-fn render_tabs(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let titles = TAB_TITLES
+    let rows = app
+        .fields()
         .iter()
-        .map(|t| Line::from(Span::raw(*t)))
+        .enumerate()
+        .map(|(idx, (label, value))| {
+            let style = if idx == app.selected_field {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![(*label).to_string(), (*value).to_string()]).style(style)
+        })
         .collect::<Vec<_>>();
 
-    let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("ForgeISO"))
-        .select(app.tab_index)
-        .highlight_style(Style::default().fg(Color::Cyan).bold())
-        .divider(Span::raw(" | "));
+    let table = Table::new(rows, [Constraint::Length(10), Constraint::Min(30)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Local Build Form"),
+        )
+        .row_highlight_style(Style::default().bold());
+    frame.render_widget(table, chunks[0]);
 
-    frame.render_widget(tabs, area);
-}
-
-fn render_main(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let text = match app.tab_index {
-        0 => "Configure\n- Distro policy and release validation\n- Profile presets\n- User/SSH hardening",
-        1 => "Build\n- Containerized backend execution\n- Live logs from engine events\n- Artifact generation",
-        2 => "Scans\n- SBOM generation\n- Vulnerability/compliance/secrets gates",
-        3 => "Tests\n- BIOS/UEFI smoke checks\n- Serial log and screenshot collection",
-        _ => "Reports\n- JSON and HTML export\n- Build provenance and security summaries",
-    };
-
-    let paragraph =
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Panel"));
-
-    frame.render_widget(paragraph, area);
-}
-
-fn render_logs(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let lines = app
-        .logs
+    let inspect_lines = app
+        .inspection
         .iter()
-        .rev()
-        .take(8)
-        .rev()
         .map(|line| Line::from(line.clone()))
         .collect::<Vec<_>>();
+    let inspect = Paragraph::new(inspect_lines)
+        .block(Block::default().borders(Borders::ALL).title("Inspection"));
+    frame.render_widget(inspect, chunks[1]);
 
+    let log_lines = app
+        .logs
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
     let logs =
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Live Logs"));
+        Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title("Logs"));
+    frame.render_widget(logs, chunks[2]);
 
-    frame.render_widget(logs, area);
+    let help = Paragraph::new(vec![Line::from(
+        "Up/Down select, Enter edit, i inspect, b build, s scan, t test, q quit",
+    )])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(app.status.as_str()),
+    );
+    frame.render_widget(help, chunks[3]);
+
+    if app.editing {
+        let popup = centered_rect(60, 18, frame.area());
+        frame.render_widget(Clear, popup);
+        let edit =
+            Paragraph::new("Typing into selected field. Press Enter or Esc to stop editing.")
+                .block(Block::default().borders(Borders::ALL).title("Editing"));
+        frame.render_widget(edit, popup);
+    }
+}
+
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }

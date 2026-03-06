@@ -1,41 +1,16 @@
-# Security Baseline
+# Security Notes
 
-Author: Jamal Al-Sarraf
+## Local-first execution
 
-## Defaults
+ForgeISO performs product workflows locally on the host machine. It does not open product-side network services or require a remote agent.
 
-- Containerized execution for build/test/scan stages
-- `dangerous_mode` disabled by default
-- SSH hardening defaults:
-  - `PermitRootLogin no`
-  - `PasswordAuthentication no`
-  - `PubkeyAuthentication yes`
-- Secrets scanning enabled by default
-- Vulnerability gate defaults to `CRITICAL`
+## Host trust boundary
 
-## Scan outputs
+- Inspect the source ISO before building
+- Use only local overlay directories you trust
+- Review generated reports before distributing a remastered image
+- Keep local toolchain packages current on the Linux host
 
-- SBOM artifacts:
-  - SPDX JSON
-  - CycloneDX JSON
-- Vulnerability reports:
-  - Trivy filesystem scan
-  - Optional Syft/Grype reports
-- Compliance:
-  - OpenSCAP stage output
-- Secrets:
-  - Pattern-based workspace findings report
+## CI/CD containers
 
-## Remote agent hardening
-
-- TLS required for all gRPC traffic
-- mTLS enabled by default
-- Job token verification via request metadata (`x-job-token`)
-- Artifact/log retrieval scoped per job ID
-
-## Recommended enterprise controls
-
-- Pin container images by digest in production
-- Store checksums/SBOMs in immutable artifact storage
-- Run CI on isolated runners with hardened Docker daemon policy
-- Rotate agent tokens and client certificates regularly
+CI containers are allowed only for pipeline execution. They should be ephemeral and removed when the pipeline completes.

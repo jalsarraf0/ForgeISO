@@ -1,138 +1,59 @@
 # ForgeISO
 
-Author: Jamal Al-Sarraf
+ForgeISO is a local-first Linux ISO remastering toolkit.
 
-ForgeISO is a production-grade, cross-distro ISO customization platform with:
-- Premium desktop GUI using Tauri v2 + React
-- First-class automation CLI in Rust
-- Terminal wizard TUI in Rust
-- Optional remote Linux build/test agent in Go over gRPC with TLS/mTLS
+It now runs on bare metal only:
+- no Docker or Podman runtime for product features
+- no local or remote agent servers
+- no endpoint configuration in the GUI, TUI, or CLI
+- Linux is the only supported host for build and VM test workflows
 
-## Core capabilities
+## What works
 
-- Distro policy enforcement:
-  - Ubuntu: LTS only
-  - Linux Mint: LTS only
-  - Fedora: latest stable with non-LTS lifecycle warning
-  - Arch: rolling snapshot
-- Container-first execution (Docker preferred, Podman supported)
-- Rich customization:
-  - Multi-user provisioning and SSH key management
-  - SSH hardening policy and overrides
-  - Desktop theming/wallpapers/bundle presets
-  - Safe module model for advanced customization
-- Security pipeline:
-  - SBOM (SPDX + CycloneDX)
-  - Vulnerability scanning (Trivy; optional Syft/Grype)
-  - Compliance scanning (OpenSCAP path)
-  - Secrets scanning with strict mode gating
-- Regression strategy:
-  - Unit, integration, and smoke E2E
-  - VM test harness (BIOS + UEFI)
-  - Optional openQA path
+- Inspect a local ISO or a user-provided download URL
+- Detect distro/release/architecture from the ISO itself
+- Download the ISO locally when a URL is provided
+- Apply a local overlay directory into the ISO/rootfs when the layout is supported
+- Repack and export a new ISO locally
+- Run local scan, smoke test, and report steps with honest prerequisite checks
 
-## Monorepo layout
+## Workspace layout
 
-- `engine/` Rust engine library (policy, orchestration, scanning, reports)
-- `cli/` Rust CLI binary (`forgeiso`)
-- `tui/` Rust TUI binary (`forgeiso-tui`)
-- `gui/` Tauri v2 desktop app
-- `agent/` Go remote build/test daemon (`forgeiso-agent`)
-- `proto/` gRPC contract
-- `containers/` CI container definitions (C1..C6)
-- `scripts/` local/CI helper scripts
-- `examples/` reference config and profile examples
-- `docs/` architecture, runbooks, security and policy docs
-- `hooks/` optional Python hooks runner (disabled by default)
+- `engine/` shared local build engine
+- `cli/` automation CLI (`forgeiso`)
+- `tui/` terminal UI (`forgeiso-tui`)
+- `gui/` Tauri desktop UI for Linux
+- `containers/` CI-only ephemeral container definitions
+- `examples/` local project examples
+- `docs/` local workflow and troubleshooting notes
 
 ## Quick start
 
 ```bash
-make test
-make build
 cargo run -p forgeiso-cli -- doctor
+cargo run -p forgeiso-cli -- inspect --source /path/to/base.iso
+cargo run -p forgeiso-cli -- build --source /path/to/base.iso --out ./artifacts --name my-build
 ```
 
-GUI development:
+Use a URL when you want ForgeISO to fetch the ISO onto the local machine first:
 
 ```bash
-cd gui
-npm ci
-npm run dev
+cargo run -p forgeiso-cli -- inspect --source https://example.invalid/distro.iso
+cargo run -p forgeiso-cli -- build --source https://example.invalid/distro.iso --out ./artifacts --name downloaded-build
 ```
 
-TUI:
+## GUI and TUI
 
 ```bash
 cargo run -p forgeiso-tui
+cd gui && npm run build && cargo run --manifest-path src-tauri/Cargo.toml
 ```
 
-## CLI reference
-
-```bash
-forgeiso doctor [--json]
-forgeiso list-releases --distro <ubuntu|mint|fedora|arch> [--json]
-forgeiso build --config <file> --out <dir> [--latest|--pinned] [--keep-workdir]
-forgeiso scan --artifact <path> [--policy <file>] [--json]
-forgeiso test --iso <path> [--uefi] [--bios] [--json]
-forgeiso report --build <dir> --format html|json
-forgeiso inspect --iso <path>
-```
+The built GUI is a local desktop app. It does not connect to any endpoint.
 
 ## CI/CD
 
-`/.github/workflows/ci.yml` runs six ephemeral container stages in parallel:
-- C1 Rust quality gates
-- C2 Go quality gates
-- C3 GUI lint/build
-- C4 security scans
-- C5 integration tests
-- C6 E2E smoke
-
-Local parity:
-
-```bash
-make ci-local
-```
-
-`/.github/workflows/release.yml` handles tagged releases with matrix parallelization:
-- release gate verifies commit ancestry (`main`) and successful CI for the exact SHA
-- Linux package matrix (`tar.gz`, `tar.zst`, `deb`, `rpm`, `pacman`) from a single Linux binary build
-- parallel Windows/macOS binary builds
-- final clean bundle verification before GitHub Release publish
-
-Release packaging outputs include:
-- `tar.gz` bundle
-- `tar.zst` bundle
-- `.deb` package for APT-based systems
-- `.rpm` package for DNF/YUM-based systems
-- `.pkg.tar.zst` package for Pacman-based systems
-- generated repo metadata bundle: `forgeiso-repos-<version>.tar.gz` for apt/dnf/pacman feeds
-- per-platform binary bundles: `forgeiso-binaries-<version>-<platform>.{tar.gz|zip}`
-- integrity/report artifacts: `checksums.txt` and `release-manifest.json`
-
-Install from released artifacts:
-
-```bash
-# Debian/Ubuntu/Mint
-sudo apt install ./forgeiso_<version>_amd64.deb
-
-# Fedora/RHEL family
-sudo dnf install ./forgeiso-<version>-1*.rpm
-
-# Arch family
-sudo pacman -U ./forgeiso-<version>-1-x86_64.pkg.tar.zst
-```
-
-## Enterprise operations
-
-- Governance and repo ownership controls: `.github/CODEOWNERS`, `scripts/github-lockdown.sh`
-- Security baseline and hardening: `docs/security.md`
-- Release and lifecycle policy: `docs/lts-policy.md`
-- Build/test/release runbooks:
-  - `docs/runbook-local.md`
-  - `docs/runbook-remote-agent.md`
-  - `docs/runbook-release.md`
+CI containers remain allowed only for pipeline work. They are defined under `containers/` and orchestrated by `docker-compose.ci.yml`. They must remain ephemeral and be torn down at the end of the pipeline.
 
 ## License
 

@@ -1,25 +1,21 @@
 # Troubleshooting
 
-Author: Jamal Al-Sarraf
+## Build fails on a non-Linux host
 
-## Tauri build fails on Linux
+ForgeISO only supports local build and VM test flows on Linux.
 
-Install GTK/WebKit dependencies:
-- Debian/Ubuntu: `libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
-- Fedora: `gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel`
+## ISO inspection is missing distro details
 
-## Docker unavailable
+Install `xorriso` so ForgeISO can read files from inside the ISO instead of relying only on the primary volume label.
 
-If Docker is unavailable, set runtime to Podman in config:
+## Repack fails after rootfs extraction
 
-```yaml
-runtime: podman
-```
+Install both `unsquashfs` and `mksquashfs`. ForgeISO uses them for Ubuntu, Mint, and Arch root filesystem updates.
 
-## VM tests unavailable in CI
+## Fedora overlay does not reach the live rootfs
 
-If nested virtualization is unavailable, run mocked smoke mode in C6 and offload real BIOS/UEFI tests to a self-hosted runner with KVM support.
+Some Fedora live images use nested filesystem layouts that are not yet rewritten by the local remaster step. ForgeISO will still update top-level ISO content and report the limitation honestly.
 
-## Secrets scan failures
+## UEFI smoke test fails immediately
 
-Review `secrets.json`, scrub credentials from modules/files, and rerun with strict mode enabled.
+Install QEMU and an OVMF firmware package so ForgeISO can boot the ISO locally in UEFI mode.

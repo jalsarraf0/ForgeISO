@@ -6,7 +6,7 @@ use tokio::{fs, process::Command};
 use walkdir::WalkDir;
 
 use crate::{
-    config::{ScanPolicy, Severity},
+    config::{ScanPolicy, ToolStatus},
     error::{EngineError, EngineResult},
 };
 
@@ -18,31 +18,10 @@ pub struct SeverityCount {
     pub low: u64,
 }
 
-impl SeverityCount {
-    fn add_marker(&mut self, marker: &str) {
-        match marker {
-            "critical" => self.critical += 1,
-            "high" => self.high += 1,
-            "medium" => self.medium += 1,
-            "low" => self.low += 1,
-            _ => {}
-        }
-    }
-
-    fn meets_or_exceeds(&self, threshold: Severity) -> bool {
-        match threshold {
-            Severity::Critical => self.critical > 0,
-            Severity::High => self.critical > 0 || self.high > 0,
-            Severity::Medium => self.critical > 0 || self.high > 0 || self.medium > 0,
-            Severity::Low => self.critical > 0 || self.high > 0 || self.medium > 0 || self.low > 0,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolReport {
     pub tool: String,
-    pub success: bool,
+    pub status: ToolStatus,
     pub output: PathBuf,
     pub message: String,
     pub severities: SeverityCount,
@@ -67,8 +46,8 @@ pub async fn run_scans(
     let mut summary = ScanSummary {
         sbom_spdx: None,
         sbom_cyclonedx: None,
-        reports: vec![],
-        warnings: vec![],
+        reports: Vec::new(),
+        warnings: Vec::new(),
         strict_failed: false,
     };
 
@@ -82,84 +61,91 @@ pub async fn run_scans(
     }
 
     if policy.enable_trivy {
-        let report = run_external_or_stub(
-            "trivy",
-            vec![
-                "fs".to_string(),
-                "--quiet".to_string(),
-                "--format".to_string(),
-                "json".to_string(),
-                target.display().to_string(),
-            ],
-            out_dir.join("trivy.json"),
-        )
-        .await?;
-        summary.reports.push(report);
+        summary.reports.push(
+            run_external(
+                "trivy",
+                vec![
+                    "fs".to_string(),
+                    "--quiet".to_string(),
+                    "--format".to_string(),
+                    "json".to_string(),
+                    target.display().to_string(),
+                ],
+                out_dir.join("trivy.json"),
+            )
+            .await?,
+        );
     }
 
     if policy.enable_syft_grype {
-        let syft = run_external_or_stub(
-            "syft",
-            vec![
-                target.display().to_string(),
-                "-o".to_string(),
-                "json".to_string(),
-            ],
-            out_dir.join("syft.json"),
-        )
-        .await?;
-        summary.reports.push(syft);
-
-        let grype = run_external_or_stub(
-            "grype",
-            vec![
-                target.display().to_string(),
-                "-o".to_string(),
-                "json".to_string(),
-            ],
-            out_dir.join("grype.json"),
-        )
-        .await?;
-        summary.reports.push(grype);
+        summary.reports.push(
+            run_external(
+                "syft",
+                vec![
+                    target.display().to_string(),
+                    "-o".to_string(),
+                    "json".to_string(),
+                ],
+                out_dir.join("syft.json"),
+            )
+            .await?,
+        );
+        summary.reports.push(
+            run_external(
+                "grype",
+                vec![
+                    target.display().to_string(),
+                    "-o".to_string(),
+                    "json".to_string(),
+                ],
+                out_dir.join("grype.json"),
+            )
+            .await?,
+        );
     }
 
     if policy.enable_open_scap {
-        let oscap = run_external_or_stub(
-            "oscap",
-            vec!["--version".to_string()],
-            out_dir.join("oscap.txt"),
-        )
-        .await?;
-        summary.reports.push(oscap);
+        summary.reports.push(
+            run_external(
+                "oscap",
+                vec!["--version".to_string()],
+                out_dir.join("oscap.txt"),
+            )
+            .await?,
+        );
     }
 
     if policy.enable_secrets_scan {
         let findings = detect_secrets(target)?;
         let output = out_dir.join("secrets.json");
         fs::write(&output, serde_json::to_vec_pretty(&findings)?).await?;
+        let status = if findings.is_empty() {
+            ToolStatus::Passed
+        } else if policy.strict_secrets {
+            summary.strict_failed = true;
+            ToolStatus::Failed
+        } else {
+            ToolStatus::Passed
+        };
 
-        let mut sev = SeverityCount::default();
         if !findings.is_empty() {
-            sev.high = findings.len() as u64;
-            if policy.strict_secrets {
-                summary.strict_failed = true;
-                summary.warnings.push(format!(
-                    "Strict secrets mode found {} potential secret(s)",
-                    findings.len()
-                ));
-            } else {
-                summary
-                    .warnings
-                    .push(format!("Potential secrets found: {}", findings.len()));
-            }
+            summary
+                .warnings
+                .push(format!("Potential secrets found: {}", findings.len()));
         }
 
         summary.reports.push(ToolReport {
             tool: "secrets".to_string(),
-            success: !policy.strict_secrets || findings.is_empty(),
+            status,
             output,
-            message: "Local secrets pattern scan".to_string(),
-            severities: sev,
+            message: format!(
+                "Local content scan found {} possible secret(s)",
+                findings.len()
+            ),
+            severities: SeverityCount {
+                high: findings.len() as u64,
+                ..SeverityCount::default()
+            },
         });
     }
 
@@ -169,28 +155,7 @@ pub async fn run_scans(
         ));
     }
 
-    if let Some(threshold) = policy.fail_on_severity {
-        let total = summarize_severity(&summary.reports);
-        if total.meets_or_exceeds(threshold) {
-            return Err(EngineError::PolicyViolation(format!(
-                "Severity gate failed at threshold {:?}",
-                threshold
-            )));
-        }
-    }
-
     Ok(summary)
-}
-
-fn summarize_severity(reports: &[ToolReport]) -> SeverityCount {
-    let mut total = SeverityCount::default();
-    for report in reports {
-        total.critical += report.severities.critical;
-        total.high += report.severities.high;
-        total.medium += report.severities.medium;
-        total.low += report.severities.low;
-    }
-    total
 }
 
 async fn write_simple_sbom(target: &Path, out: &Path, format: &str) -> EngineResult<()> {
@@ -205,26 +170,19 @@ async fn write_simple_sbom(target: &Path, out: &Path, format: &str) -> EngineRes
     Ok(())
 }
 
-async fn run_external_or_stub(
-    tool: &str,
-    args: Vec<String>,
-    output: PathBuf,
-) -> EngineResult<ToolReport> {
+async fn run_external(tool: &str, args: Vec<String>, output: PathBuf) -> EngineResult<ToolReport> {
     if which::which(tool).is_err() {
-        fs::write(
-            &output,
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "tool": tool,
-                "status": "stub",
-                "message": "tool missing"
-            }))?,
-        )
-        .await?;
+        let body = serde_json::json!({
+            "tool": tool,
+            "status": "unavailable",
+            "message": "Tool is not installed on this machine"
+        });
+        fs::write(&output, serde_json::to_vec_pretty(&body)?).await?;
         return Ok(ToolReport {
             tool: tool.to_string(),
-            success: true,
+            status: ToolStatus::Unavailable,
             output,
-            message: format!("{tool} not found; emitted stub report"),
+            message: format!("{tool} is not installed locally"),
             severities: SeverityCount::default(),
         });
     }
@@ -236,25 +194,27 @@ async fn run_external_or_stub(
         .map_err(|e| EngineError::Runtime(format!("{tool} failed to start: {e}")))?;
 
     fs::write(&output, &result.stdout).await?;
-    let mut severities = SeverityCount::default();
-    infer_severity_markers(&result.stdout, &mut severities);
 
     Ok(ToolReport {
         tool: tool.to_string(),
-        success: result.status.success(),
+        status: if result.status.success() {
+            ToolStatus::Passed
+        } else {
+            ToolStatus::Failed
+        },
         output,
-        message: String::from_utf8_lossy(&result.stderr).to_string(),
-        severities,
+        message: String::from_utf8_lossy(&result.stderr).trim().to_string(),
+        severities: infer_severities(&result.stdout),
     })
 }
 
-fn infer_severity_markers(data: &[u8], sev: &mut SeverityCount) {
+fn infer_severities(data: &[u8]) -> SeverityCount {
     let body = String::from_utf8_lossy(data).to_lowercase();
-    for marker in ["critical", "high", "medium", "low"] {
-        let count = body.matches(marker).count();
-        for _ in 0..count {
-            sev.add_marker(marker);
-        }
+    SeverityCount {
+        critical: body.matches("critical").count() as u64,
+        high: body.matches("high").count() as u64,
+        medium: body.matches("medium").count() as u64,
+        low: body.matches("low").count() as u64,
     }
 }
 
@@ -280,7 +240,6 @@ fn detect_secrets(target: &Path) -> EngineResult<Vec<BTreeMap<String, String>>> 
         if !entry.file_type().is_file() {
             continue;
         }
-
         let Ok(content) = std::fs::read_to_string(entry.path()) else {
             continue;
         };

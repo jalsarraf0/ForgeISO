@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use forgeiso_engine::{parse_build_mode, Distro, EngineEvent, EventLevel, ForgeIsoEngine};
+use forgeiso_engine::{BuildConfig, ForgeIsoEngine, IsoSource, ProfileKind};
 
 #[derive(Debug, Parser)]
-#[command(name = "forgeiso", version, about = "ForgeISO enterprise CLI")]
+#[command(name = "forgeiso", version, about = "ForgeISO local bare-metal CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -16,23 +16,29 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    ListReleases {
+    Inspect {
         #[arg(long)]
-        distro: String,
+        source: String,
         #[arg(long)]
         json: bool,
     },
     Build {
         #[arg(long)]
-        config: PathBuf,
+        source: Option<String>,
+        #[arg(long)]
+        project: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
         #[arg(long)]
-        latest: bool,
+        name: Option<String>,
         #[arg(long)]
-        pinned: bool,
+        overlay: Option<PathBuf>,
         #[arg(long)]
-        keep_workdir: bool,
+        volume_label: Option<String>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     Scan {
         #[arg(long)]
@@ -46,9 +52,9 @@ enum Commands {
         #[arg(long)]
         iso: PathBuf,
         #[arg(long)]
-        uefi: bool,
-        #[arg(long)]
         bios: bool,
+        #[arg(long)]
+        uefi: bool,
         #[arg(long)]
         json: bool,
     },
@@ -58,18 +64,10 @@ enum Commands {
         #[arg(long)]
         format: String,
     },
-    Inspect {
-        #[arg(long)]
-        iso: PathBuf,
-    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
     let engine = ForgeIsoEngine::new();
 
@@ -80,84 +78,119 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("ForgeISO doctor @ {}", report.timestamp);
-                println!("Runtimes:");
-                for (name, available) in report.runtime_candidates {
-                    println!("  - {name}: {available}");
-                }
+                println!("Host: {} {}", report.host_os, report.host_arch);
+                println!("Linux build support: {}", report.linux_supported);
                 println!("Tooling:");
                 for (name, available) in report.tooling {
                     println!("  - {name}: {available}");
                 }
+                for warning in report.warnings {
+                    println!("warning: {warning}");
+                }
             }
         }
-        Commands::ListReleases { distro, json } => {
-            let distro = parse_distro(&distro)?;
-            let releases = engine.list_releases(distro).await?;
+        Commands::Inspect { source, json } => {
+            let cache_dir = std::env::temp_dir().join("forgeiso-inspect-cache");
+            let info = engine.inspect_source(&source, Some(&cache_dir)).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&releases)?);
+                println!("{}", serde_json::to_string_pretty(&info)?);
             } else {
-                for release in releases {
-                    println!(
-                        "{} lts={} stable={} warning={}",
-                        release.version,
-                        release.lts,
-                        release.stable,
-                        release.eol_warning.unwrap_or_default()
-                    );
+                println!("Source: {}", info.source_value);
+                println!("Cached path: {}", info.source_path.display());
+                println!(
+                    "Detected: distro={} release={} arch={}",
+                    info.distro
+                        .map(|value| format!("{:?}", value))
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    info.release.as_deref().unwrap_or("unknown"),
+                    info.architecture.as_deref().unwrap_or("unknown")
+                );
+                println!(
+                    "Volume ID: {}",
+                    info.volume_id.as_deref().unwrap_or("unknown")
+                );
+                if !info.warnings.is_empty() {
+                    println!("Warnings:");
+                    for warning in info.warnings {
+                        println!("  - {warning}");
+                    }
                 }
             }
         }
         Commands::Build {
-            config,
+            source,
+            project,
             out,
-            latest,
-            pinned,
-            keep_workdir,
+            name,
+            overlay,
+            volume_label,
+            profile,
+            json,
         } => {
-            let mode = parse_build_mode(latest, pinned)?;
-            let mut receiver = engine.subscribe();
-            let log_task = tokio::spawn(async move {
-                while let Ok(event) = receiver.recv().await {
-                    render_event(&event);
+            let cfg = if let Some(project) = project {
+                BuildConfig::from_path(&project)?
+            } else {
+                let source = source.ok_or_else(|| {
+                    anyhow::anyhow!("--source is required when --project is not used")
+                })?;
+                BuildConfig {
+                    name: name.unwrap_or_else(|| "forgeiso-build".to_string()),
+                    source: IsoSource::from_raw(source),
+                    overlay_dir: overlay,
+                    output_label: volume_label,
+                    profile: parse_profile(profile.as_deref().unwrap_or("minimal"))?,
+                    auto_scan: false,
+                    auto_test: false,
+                    scanning: Default::default(),
+                    testing: Default::default(),
+                    keep_workdir: false,
                 }
-            });
+            };
 
-            let result = engine
-                .build_from_file(&config, &out, mode, keep_workdir)
-                .await?;
-
-            log_task.abort();
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            let result = engine.build(&cfg, &out).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Built ISO: {}", result.artifacts[0].display());
+                println!("Report JSON: {}", result.report_json.display());
+                println!("Report HTML: {}", result.report_html.display());
+                println!(
+                    "Detected source: distro={} release={}",
+                    result
+                        .iso
+                        .distro
+                        .map(|value| format!("{:?}", value))
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    result.iso.release.as_deref().unwrap_or("unknown")
+                );
+            }
         }
         Commands::Scan {
             artifact,
             policy,
             json,
         } => {
-            let mut receiver = engine.subscribe();
-            let log_task = tokio::spawn(async move {
-                while let Ok(event) = receiver.recv().await {
-                    render_event(&event);
-                }
-            });
-
             let out = artifact
                 .parent()
                 .map(|p| p.join("scan"))
                 .unwrap_or_else(|| PathBuf::from("scan"));
             let result = engine.scan(&artifact, policy.as_deref(), &out).await?;
-
-            log_task.abort();
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!("scan report: {}", result.report_json.display());
+                for report in result.report.reports {
+                    println!(
+                        "  - {}: {:?} ({})",
+                        report.tool, report.status, report.message
+                    );
+                }
             }
         }
         Commands::Test {
             iso,
-            uefi,
             bios,
+            uefi,
             json,
         } => {
             let run_bios = bios || !uefi;
@@ -174,47 +207,24 @@ async fn main() -> anyhow::Result<()> {
                     "bios={} uefi={} passed={}",
                     result.bios, result.uefi, result.passed
                 );
+                for log in result.logs {
+                    println!("  - {}", log.display());
+                }
             }
         }
         Commands::Report { build, format } => {
             let path = engine.report(&build, &format).await?;
             println!("{}", path.display());
         }
-        Commands::Inspect { iso } => {
-            let info = engine.inspect_iso(&iso).await?;
-            println!("{}", serde_json::to_string_pretty(&info)?);
-        }
     }
 
     Ok(())
 }
 
-fn parse_distro(raw: &str) -> anyhow::Result<Distro> {
+fn parse_profile(raw: &str) -> anyhow::Result<ProfileKind> {
     match raw {
-        "ubuntu" => Ok(Distro::Ubuntu),
-        "mint" => Ok(Distro::Mint),
-        "fedora" => Ok(Distro::Fedora),
-        "arch" => Ok(Distro::Arch),
-        _ => anyhow::bail!(
-            "unsupported distro '{}': expected ubuntu|mint|fedora|arch",
-            raw
-        ),
+        "minimal" => Ok(ProfileKind::Minimal),
+        "desktop" => Ok(ProfileKind::Desktop),
+        other => anyhow::bail!("unsupported profile '{other}': expected minimal|desktop"),
     }
-}
-
-fn render_event(event: &EngineEvent) {
-    let level = match event.level {
-        EventLevel::Debug => "DEBUG",
-        EventLevel::Info => "INFO",
-        EventLevel::Warn => "WARN",
-        EventLevel::Error => "ERROR",
-    };
-
-    println!(
-        "[{}] [{:?}] [{}] {}",
-        event.ts.to_rfc3339(),
-        event.phase,
-        level,
-        event.message
-    );
 }
