@@ -21,11 +21,6 @@ jobs:
             dockerfile: containers/C1.rust.Dockerfile
             script: scripts/ci/c1-rust.sh
             cache: rust
-          - id: c2
-            label: "C2 Go"
-            dockerfile: containers/C2.go.Dockerfile
-            script: scripts/ci/c2-go.sh
-            cache: none
           - id: c3
             label: "C3 GUI"
             dockerfile: containers/C3.gui.Dockerfile

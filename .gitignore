@@ -2,6 +2,7 @@
 target/
 **/*.rs.bk
 Cargo.lock
+.cargo-tmp/
 
 # Node/Tauri
 gui/node_modules/

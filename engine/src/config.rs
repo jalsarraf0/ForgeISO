@@ -89,9 +89,9 @@ impl Default for ScanPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestingPolicy {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub bios: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub uefi: bool,
     #[serde(default = "default_true")]
     pub smoke: bool,
