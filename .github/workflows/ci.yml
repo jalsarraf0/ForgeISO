@@ -19,31 +19,37 @@ jobs:
             dockerfile: containers/C1.rust.Dockerfile
             script: scripts/ci/c1-rust.sh
             cache: rust
+            upload_artifacts: false
           - id: c2
             label: "C2 Go"
             dockerfile: containers/C2.go.Dockerfile
             script: scripts/ci/c2-go.sh
             cache: go
+            upload_artifacts: false
           - id: c3
             label: "C3 GUI"
             dockerfile: containers/C3.gui.Dockerfile
             script: scripts/ci/c3-gui.sh
             cache: gui
+            upload_artifacts: false
           - id: c4
             label: "C4 Security"
             dockerfile: containers/C4.security.Dockerfile
             script: scripts/ci/c4-security.sh
             cache: security
+            upload_artifacts: true
           - id: c5
             label: "C5 Integration"
             dockerfile: containers/C5.integration.Dockerfile
             script: scripts/ci/c5-integration.sh
             cache: rust
+            upload_artifacts: true
           - id: c6
             label: "C6 E2E Smoke"
             dockerfile: containers/C6.e2e.Dockerfile
             script: scripts/ci/c6-e2e.sh
             cache: rust
+            upload_artifacts: true
 
     steps:
       - uses: actions/checkout@v4
@@ -95,8 +101,16 @@ jobs:
             forgeiso-${{ matrix.id }} \
             bash -c "${{ matrix.script }}"
 
+      - name: Normalize artifact ownership
+        if: always() && matrix.upload_artifacts
+        run: |
+          if [[ -d artifacts ]]; then
+            sudo chown -R "$(id -u):$(id -g)" artifacts
+            chmod -R u+rwX,go+rX artifacts
+          fi
+
       - name: Upload artifacts
-        if: always()
+        if: always() && matrix.upload_artifacts
         uses: actions/upload-artifact@v4
         with:
           name: forgeiso-${{ matrix.id }}-artifacts
