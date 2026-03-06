@@ -2,7 +2,7 @@ name: forgeiso-ci
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
     tags:
       - "v*.*.*"
   pull_request:
