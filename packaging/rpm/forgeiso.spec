@@ -1,5 +1,5 @@
 Name:           forgeiso
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Local bare-metal ISO remastering toolkit
 License:        Apache-2.0
