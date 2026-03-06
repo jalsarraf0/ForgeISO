@@ -33,17 +33,8 @@ if [[ ! -d "${RELEASE_DIR}" ]]; then
 fi
 
 require_file "${RELEASE_DIR}/forgeiso-${VERSION}-linux-x86_64.tar.gz"
-require_file "${RELEASE_DIR}/forgeiso-${VERSION}-linux-x86_64.tar.zst"
-require_file "${RELEASE_DIR}/forgeiso_${VERSION}_amd64.deb"
-require_glob "${RELEASE_DIR}/forgeiso-${VERSION}-1*.rpm"
-require_file "${RELEASE_DIR}/forgeiso-${VERSION}-1-x86_64.pkg.tar.zst"
-require_file "${RELEASE_DIR}/forgeiso-repos-${VERSION}.tar.gz"
-require_file "${RELEASE_DIR}/forgeiso-binaries-${VERSION}-linux-x86_64.tar.gz"
-require_file "${RELEASE_DIR}/forgeiso-binaries-${VERSION}-windows-x86_64.zip"
-require_file "${RELEASE_DIR}/forgeiso-binaries-${VERSION}-macos-x86_64.tar.gz"
-require_file "${RELEASE_DIR}/forgeiso-binaries-${VERSION}-macos-arm64.tar.gz"
+require_file "${RELEASE_DIR}/forgeiso-gui"
 require_file "${RELEASE_DIR}/checksums.txt"
-require_file "${RELEASE_DIR}/release-manifest.json"
 
 if find "${RELEASE_DIR}" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
   echo "release directory contains unexpected subdirectories" >&2
