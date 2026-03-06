@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+mkdir -p "$ROOT_DIR/.cargo-tmp"
+export TMPDIR="$ROOT_DIR/.cargo-tmp"
 cd "$ROOT_DIR/gui"
 
 offline_flag=()
