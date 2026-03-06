@@ -102,6 +102,4 @@ jobs:
           name: forgeiso-${{ matrix.id }}-artifacts
           path: |
             artifacts/**
-            **/build-report.json
-            **/build-report.html
           if-no-files-found: ignore
