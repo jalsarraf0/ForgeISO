@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.1.0)}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RELEASE_DIR="${ROOT_DIR}/dist/release"
-REPOS_DIR="${ROOT_DIR}/dist/repos"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common.sh"
+
+ROOT_DIR="$(forgeiso_root_dir)"
+VERSION="$(forgeiso_release_version "${ROOT_DIR}" "${1:-}")"
+RELEASE_DIR="$(forgeiso_release_dir "${ROOT_DIR}")"
+REPOS_DIR="${FORGEISO_REPOS_DIR:-${ROOT_DIR}/dist/repos}"
 APT_REPO_DIR="${REPOS_DIR}/apt"
 RPM_REPO_DIR="${REPOS_DIR}/rpm"
 PACMAN_REPO_DIR="${REPOS_DIR}/pacman"

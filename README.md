@@ -95,6 +95,12 @@ Local parity:
 make ci-local
 ```
 
+`/.github/workflows/release.yml` handles tagged releases with matrix parallelization:
+- release gate verifies commit ancestry (`main`) and successful CI for the exact SHA
+- Linux package matrix (`tar.gz`, `tar.zst`, `deb`, `rpm`, `pacman`) from a single Linux binary build
+- parallel Windows/macOS binary builds
+- final clean bundle verification before GitHub Release publish
+
 Release packaging outputs include:
 - `tar.gz` bundle
 - `tar.zst` bundle
@@ -102,6 +108,8 @@ Release packaging outputs include:
 - `.rpm` package for DNF/YUM-based systems
 - `.pkg.tar.zst` package for Pacman-based systems
 - generated repo metadata bundle: `forgeiso-repos-<version>.tar.gz` for apt/dnf/pacman feeds
+- per-platform binary bundles: `forgeiso-binaries-<version>-<platform>.{tar.gz|zip}`
+- integrity/report artifacts: `checksums.txt` and `release-manifest.json`
 
 Install from released artifacts:
 

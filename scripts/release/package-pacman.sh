@@ -6,11 +6,26 @@ if ! command -v fpm >/dev/null 2>&1; then
   exit 1
 fi
 
-VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.1.0)}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="${ROOT_DIR}/dist/release"
+if ! command -v bsdtar >/dev/null 2>&1; then
+  echo "bsdtar is required to build pacman package (install libarchive-tools)" >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common.sh"
+
+ROOT_DIR="$(forgeiso_root_dir)"
+VERSION="$(forgeiso_release_version "${ROOT_DIR}" "${1:-}")"
+BIN_DIR="$(forgeiso_bin_dir "${ROOT_DIR}")"
+OUT_DIR="$(forgeiso_release_dir "${ROOT_DIR}")"
+PACKAGE_PATH="${OUT_DIR}/forgeiso-${VERSION}-1-x86_64.pkg.tar.zst"
+
+forgeiso_require_binary "${BIN_DIR}" "forgeiso"
+forgeiso_require_binary "${BIN_DIR}" "forgeiso-tui"
+forgeiso_require_binary "${BIN_DIR}" "forgeiso-agent"
 
 mkdir -p "${OUT_DIR}"
+rm -f "${PACKAGE_PATH}"
 
 fpm \
   -s dir \
@@ -24,11 +39,11 @@ fpm \
   --description "Cross-distro ISO customization platform" \
   --url "https://github.com/jalsarraf0/ForgeISO" \
   --depends bash \
-  --package "${OUT_DIR}/forgeiso-${VERSION}-1-x86_64.pkg.tar.zst" \
-  "${ROOT_DIR}/target/release/forgeiso=/usr/bin/forgeiso" \
-  "${ROOT_DIR}/target/release/forgeiso-tui=/usr/bin/forgeiso-tui" \
-  "${ROOT_DIR}/target/release/forgeiso-agent=/usr/bin/forgeiso-agent" \
+  --package "${PACKAGE_PATH}" \
+  "${BIN_DIR}/forgeiso=/usr/bin/forgeiso" \
+  "${BIN_DIR}/forgeiso-tui=/usr/bin/forgeiso-tui" \
+  "${BIN_DIR}/forgeiso-agent=/usr/bin/forgeiso-agent" \
   "${ROOT_DIR}/README.md=/usr/share/doc/forgeiso/README.md" \
   "${ROOT_DIR}/LICENSE=/usr/share/licenses/forgeiso/LICENSE"
 
-echo "Created ${OUT_DIR}/forgeiso-${VERSION}-1-x86_64.pkg.tar.zst"
+echo "Created ${PACKAGE_PATH}"
