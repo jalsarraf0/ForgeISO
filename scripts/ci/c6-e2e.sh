@@ -11,13 +11,18 @@ clean_path() {
   fi
 }
 
+offline_flag=()
+if [[ "${CI:-false}" != "true" ]]; then
+  offline_flag+=(--offline)
+fi
+
 mkdir -p artifacts/e2e
 
 fake_iso=artifacts/e2e/fake.iso
 head -c 4096 /dev/zero > "$fake_iso"
 
-cargo run -p forgeiso-cli --offline -- inspect --source "$fake_iso" > artifacts/e2e/inspect.txt || true
-cargo run -p forgeiso-cli --offline -- test --iso "$fake_iso" --bios --uefi --json > artifacts/e2e/test.json || true
+cargo run -p forgeiso-cli "${offline_flag[@]}" -- inspect --source "$fake_iso" > artifacts/e2e/inspect.txt || true
+cargo run -p forgeiso-cli "${offline_flag[@]}" -- test --iso "$fake_iso" --bios --uefi --json > artifacts/e2e/test.json || true
 
 if command -v qemu-system-x86_64 >/dev/null 2>&1; then
   echo '{"nested_virtualization":"available"}' > artifacts/e2e/virt.json
@@ -30,14 +35,14 @@ if command -v qemu-system-x86_64 >/dev/null 2>&1 && { command -v grub2-mkrescue 
   clean_path "$smoke_dir/out"
   eval "$(scripts/test/make-smoke-iso.sh "$smoke_dir")"
 
-  cargo run -p forgeiso-cli --offline -- build \
+  cargo run -p forgeiso-cli "${offline_flag[@]}" -- build \
     --source "$ISO" \
     --out "$smoke_dir/out" \
     --name ci-e2e \
     --overlay "$OVERLAY" \
     --profile minimal \
     --json > "$smoke_dir/build.json"
-  cargo run -p forgeiso-cli --offline -- test \
+  cargo run -p forgeiso-cli "${offline_flag[@]}" -- test \
     --iso "$smoke_dir/out/ci-e2e.iso" \
     --bios \
     --uefi \
