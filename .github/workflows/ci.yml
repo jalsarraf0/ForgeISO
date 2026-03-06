@@ -11,7 +11,7 @@ on:
 jobs:
   ci-stage:
     name: "${{ matrix.label }}"
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +98,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: ci-stage
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
