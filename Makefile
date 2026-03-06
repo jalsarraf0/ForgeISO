@@ -23,8 +23,9 @@ release:
 
 package:
 	@echo "Packaging requires release binaries in target/release"
-	@echo "Running package scripts for tar.gz, RPM, DEB, and Pacman"
+	@echo "Running package scripts for tar.gz, tar.zst, RPM, DEB, and Pacman"
 	scripts/release/package-tarball.sh
+	scripts/release/package-zstd.sh
 	scripts/release/package-rpm.sh
 	scripts/release/package-deb.sh
 	scripts/release/package-pacman.sh

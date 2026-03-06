@@ -29,6 +29,8 @@ rpmbuild \
   --define "_topdir ${RPM_ROOT}" \
   --define "version ${VERSION}" \
   --define "release ${RELEASE}" \
+  --define "debug_package %{nil}" \
+  --define "_enable_debug_packages 0" \
   -ba "${RPM_ROOT}/SPECS/forgeiso.spec"
 
 mkdir -p "${ROOT_DIR}/dist/release"

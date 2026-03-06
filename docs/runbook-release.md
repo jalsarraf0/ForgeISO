@@ -25,6 +25,7 @@ The release workflow builds and publishes:
 - `forgeiso-agent` binary
 - GUI build artifact (platform dependent)
 - `forgeiso-<version>-linux-x86_64.tar.gz`
+- `forgeiso-<version>-linux-x86_64.tar.zst`
 - `forgeiso_<version>_amd64.deb` (APT)
 - `forgeiso-<version>-1.x86_64.rpm` (DNF/YUM)
 - `forgeiso-<version>-1-x86_64.pkg.tar.zst` (Pacman)

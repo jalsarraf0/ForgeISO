@@ -166,6 +166,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           scripts/release/package-tarball.sh "${VERSION}"
+          scripts/release/package-zstd.sh "${VERSION}"
           scripts/release/package-rpm.sh "${VERSION}" "1"
           scripts/release/package-deb.sh "${VERSION}"
           scripts/release/package-pacman.sh "${VERSION}"
