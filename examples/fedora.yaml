@@ -1,0 +1,21 @@
+name: fedora-gaming
+distro: fedora
+release:
+  version: "45"
+  base_iso_url: https://download.fedoraproject.org/pub/fedora/linux/releases/45/Workstation/x86_64/iso/fedora.iso
+profile: gaming
+build_mode: latest
+runtime: docker
+users:
+  - username: jamal
+    display_name: Jamal Al-Sarraf
+    groups: [wheel]
+    sudo_policy: password
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAEXAMPLE jamal@forgeiso
+modules:
+  - type: packages
+    enabled: true
+    config:
+      install: [steam, lutris]

@@ -1,0 +1,18 @@
+[package]
+name = "forgeiso-gui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jamal Al-Sarraf"]
+license = "Apache-2.0"
+
+[build-dependencies]
+tauri-build = { version = "2.0.5" }
+
+[dependencies]
+tauri = { version = "2.1.1", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+forgeiso-engine = { path = "../../engine" }
+
+[workspace]

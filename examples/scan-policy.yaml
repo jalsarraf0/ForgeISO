@@ -1,0 +1,8 @@
+enable_sbom: true
+enable_trivy: true
+enable_syft_grype: true
+enable_open_scap: true
+enable_secrets_scan: true
+strict_secrets: true
+fail_on_severity: HIGH
+compliance_profile: xccdf_org.ssgproject.content_profile_standard

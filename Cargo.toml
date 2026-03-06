@@ -1,0 +1,35 @@
+[workspace]
+members = [
+  "engine",
+  "cli",
+  "tui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/jalsarraf0/ForgeISO"
+authors = ["Jamal Al-Sarraf"]
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.5.51", features = ["derive", "env"] }
+crossterm = "0.29.0"
+ratatui = "0.29.0"
+regex = "1.12.2"
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_yaml = "0.9.34"
+sha2 = "0.10.9"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync", "process", "fs", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+walkdir = "2.5.0"
+which = "8.0.0"

@@ -1,0 +1,42 @@
+name: ubuntu-enterprise
+distro: ubuntu
+release:
+  version: "24.04"
+  codename: noble
+  base_iso_url: https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso
+profile: hardened_server
+build_mode: pinned
+runtime: docker
+users:
+  - username: jamal
+    display_name: Jamal Al-Sarraf
+    groups: [sudo]
+    sudo_policy: password
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAEXAMPLE jamal@forgeiso
+    force_key_only_ssh: true
+ssh:
+  port: 22
+  permit_root_login: false
+  password_authentication: false
+  pubkey_authentication: true
+  max_auth_tries: 4
+  hardened_preset: true
+modules:
+  - type: packages
+    enabled: true
+    config:
+      install: [curl, vim, openssh-server]
+scanning:
+  enable_sbom: true
+  enable_trivy: true
+  enable_syft_grype: false
+  enable_open_scap: true
+  enable_secrets_scan: true
+  strict_secrets: true
+  fail_on_severity: CRITICAL
+testing:
+  bios: true
+  uefi: true
+  smoke: true

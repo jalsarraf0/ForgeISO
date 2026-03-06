@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package forgeiso.agent.v1;
+
+option go_package = "github.com/jalsarraf0/ForgeISO/agent/internal/api;api";
+
+message BuildInputArtifact {
+  string path = 1;
+  bytes content = 2;
+}
+
+message SubmitBuildJobRequest {
+  string request_id = 1;
+  bytes config_yaml = 2;
+  repeated BuildInputArtifact artifacts = 3;
+}
+
+message SubmitBuildJobResponse {
+  string job_id = 1;
+  string status = 2;
+}
+
+message SubmitVmTestJobRequest {
+  string request_id = 1;
+  bytes iso_bytes = 2;
+  string iso_path = 3;
+  bool bios = 4;
+  bool uefi = 5;
+  uint32 memory_mb = 6;
+  uint32 vcpus = 7;
+}
+
+message SubmitVmTestJobResponse {
+  string job_id = 1;
+  string status = 2;
+}
+
+message StreamLogsRequest {
+  string job_id = 1;
+}
+
+message LogEntry {
+  string job_id = 1;
+  string timestamp = 2;
+  string level = 3;
+  string message = 4;
+  bool done = 5;
+}
+
+message FetchArtifactsRequest {
+  string job_id = 1;
+}
+
+message Artifact {
+  string path = 1;
+  bytes content = 2;
+  string media_type = 3;
+}
+
+message FetchArtifactsResponse {
+  string job_id = 1;
+  repeated Artifact artifacts = 2;
+}
+
+service AgentService {
+  rpc SubmitBuildJob(SubmitBuildJobRequest) returns (SubmitBuildJobResponse);
+  rpc StreamBuildLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc SubmitVmTestJob(SubmitVmTestJobRequest) returns (SubmitVmTestJobResponse);
+  rpc StreamTestLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc FetchArtifacts(FetchArtifactsRequest) returns (FetchArtifactsResponse);
+}

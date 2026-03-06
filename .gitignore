@@ -1,0 +1,26 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Node/Tauri
+gui/node_modules/
+gui/dist/
+gui/src-tauri/target/
+
+# Go
+agent/bin/
+agent/.cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# Generic
+.DS_Store
+*.log
+*.tmp
+.env
+coverage/
+artifacts/
+workdir/

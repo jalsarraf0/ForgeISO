@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /workspace/agent
+
+go test ./...
+go vet ./...

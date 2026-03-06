@@ -1,0 +1,170 @@
+name: forgeiso-ci
+
+on:
+  push:
+    branches: ["**"]
+    tags:
+      - "v*.*.*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci-stage:
+    name: "${{ matrix.label }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: c1
+            label: "C1 Rust"
+            dockerfile: containers/C1.rust.Dockerfile
+            script: scripts/ci/c1-rust.sh
+            cache: rust
+          - id: c2
+            label: "C2 Go"
+            dockerfile: containers/C2.go.Dockerfile
+            script: scripts/ci/c2-go.sh
+            cache: go
+          - id: c3
+            label: "C3 GUI"
+            dockerfile: containers/C3.gui.Dockerfile
+            script: scripts/ci/c3-gui.sh
+            cache: gui
+          - id: c4
+            label: "C4 Security"
+            dockerfile: containers/C4.security.Dockerfile
+            script: scripts/ci/c4-security.sh
+            cache: security
+          - id: c5
+            label: "C5 Integration"
+            dockerfile: containers/C5.integration.Dockerfile
+            script: scripts/ci/c5-integration.sh
+            cache: rust
+          - id: c6
+            label: "C6 E2E Smoke"
+            dockerfile: containers/C6.e2e.Dockerfile
+            script: scripts/ci/c6-e2e.sh
+            cache: rust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo
+        if: matrix.cache == 'rust' || matrix.cache == 'gui'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.id }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Go
+        if: matrix.cache == 'go'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('agent/go.sum') }}
+
+      - name: Cache Node
+        if: matrix.cache == 'gui'
+        uses: actions/cache@v4
+        with:
+          path: |
+            gui/node_modules
+            ~/.npm
+          key: node-${{ runner.os }}-${{ hashFiles('gui/package-lock.json') }}
+
+      - name: Cache Scanner DB
+        if: matrix.cache == 'security'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/grype
+          key: scanner-${{ runner.os }}-${{ github.ref_name }}
+
+      - name: Build CI container
+        run: docker build -t forgeiso-${{ matrix.id }} -f ${{ matrix.dockerfile }} .
+
+      - name: Run stage in ephemeral container
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            forgeiso-${{ matrix.id }} \
+            bash -lc "${{ matrix.script }}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgeiso-${{ matrix.id }}-artifacts
+          path: |
+            artifacts/**
+            **/build-report.json
+            **/build-report.html
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: ci-stage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libssl-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Rust binaries
+        run: |
+          cargo build --release -p forgeiso-cli
+          cargo build --release -p forgeiso-tui
+
+      - name: Build Go agent
+        run: |
+          cd agent
+          go build -o ../target/release/forgeiso-agent ./cmd/forgeiso-agent
+
+      - name: Build GUI
+        run: |
+          cd gui
+          npm ci
+          npm run build
+          cd src-tauri
+          cargo build --release
+
+      - name: Prepare release bundle
+        run: |
+          mkdir -p release
+          cp target/release/forgeiso release/
+          cp target/release/forgeiso-tui release/
+          cp target/release/forgeiso-agent release/
+          cp gui/src-tauri/target/release/forgeiso-gui release/ || true
+          sha256sum release/* > release/checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*
