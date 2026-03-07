@@ -1,0 +1,123 @@
+.TH FORGEISO 1 "2025" "ForgeISO" "User Commands"
+.SH NAME
+forgeiso \- Linux ISO builder and autoinstall injection tool
+.SH SYNOPSIS
+.B forgeiso
+.I COMMAND
+[\fIOPTIONS\fP]
+.SH DESCRIPTION
+.B forgeiso
+builds custom Linux ISOs locally on bare metal with no cloud agents or endpoints.
+It supports autoinstall injection with cloud-init configuration, SHA-256 verification,
+ISO filesystem diffing, SBOM scanning, and QEMU-based smoke testing.
+.SH COMMANDS
+.TP
+.B doctor
+Report tooling availability and host prerequisites.
+.TP
+.B inspect \fI\-\-source\fP \fISOURCE\fP
+Inspect an ISO file or URL and display metadata (distro, release, architecture, SHA-256).
+.TP
+.B verify \fI\-\-source\fP \fISOURCE\fP [\fI\-\-sums-url\fP \fIURL\fP]
+Verify the SHA-256 checksum of an ISO against official checksums.
+Auto-detects the Ubuntu SHA256SUMS URL from ISO metadata.
+.TP
+.B build \fI\-\-source\fP \fISOURCE\fP \fI\-\-out\fP \fIDIR\fP [\fIOPTIONS\fP]
+Build a customised ISO from a base source ISO and optional overlay directory.
+.TP
+.B inject \fI\-\-source\fP \fISOURCE\fP \fI\-\-out\fP \fIDIR\fP [\fIOPTIONS\fP]
+Embed a cloud-init autoinstall configuration into an Ubuntu ISO for fully
+unattended installation. Supports 60+ configuration flags covering identity,
+SSH, networking, firewall, storage, encryption, services, containers, and more.
+.TP
+.B diff \fI\-\-base\fP \fIISO\fP \fI\-\-target\fP \fIISO\fP
+Compare two ISOs and list added, removed, modified, and unchanged files.
+.TP
+.B scan \fI\-\-source\fP \fIISO\fP [\fIOPTIONS\fP]
+Run security scans (SBOM generation, vulnerability scanning, secrets detection)
+against a built ISO artifact.
+.TP
+.B test \fI\-\-source\fP \fIISO\fP [\fIOPTIONS\fP]
+Run BIOS and UEFI boot smoke tests against an ISO using QEMU.
+.TP
+.B report \fI\-\-build\fP \fIDIR\fP [\fI\-\-format\fP html|json]
+Render a build report in HTML or JSON format.
+.SH INJECT OPTIONS (selected)
+.TP
+\fB\-\-hostname\fP \fINAME\fP
+Set the installed system hostname.
+.TP
+\fB\-\-username\fP \fINAME\fP, \fB\-\-password\fP \fIPASS\fP
+Set the primary user credentials (password auto-hashed to SHA-512-crypt).
+.TP
+\fB\-\-ssh\-key\fP \fIKEY\fP
+Add an SSH authorized key (repeatable).
+.TP
+\fB\-\-static\-ip\fP \fICIDR\fP, \fB\-\-gateway\fP \fIGW\fP
+Configure static networking via netplan.
+.TP
+\fB\-\-firewall\fP, \fB\-\-allow\-port\fP \fIPORT\fP, \fB\-\-deny\-port\fP \fIPORT\fP
+Enable UFW firewall with port rules.
+.TP
+\fB\-\-docker\fP, \fB\-\-podman\fP
+Install Docker CE or Podman container runtimes.
+.TP
+\fB\-\-encrypt\fP, \fB\-\-encrypt\-passphrase\fP \fIPASS\fP
+Enable LUKS full-disk encryption.
+.TP
+\fB\-\-swap\-size\fP \fIMB\fP
+Create a swap file of the specified size.
+.TP
+\fB\-\-grub\-timeout\fP \fISEC\fP, \fB\-\-grub\-cmdline\fP \fIPARAM\fP
+Configure GRUB boot parameters.
+.TP
+\fB\-\-no\-user\-interaction\fP
+Enable fully automated (unattended) installation.
+.PP
+Run
+.B forgeiso inject \-\-help
+for the full list of 60+ inject flags.
+.SH EXAMPLES
+.TP
+.B "forgeiso doctor"
+Check host prerequisites.
+.TP
+.B "forgeiso verify \-\-source ubuntu\-24.04\-server\-amd64.iso"
+Verify ISO checksum against Ubuntu's official SHA256SUMS file.
+.TP
+.B "forgeiso inject \-\-source ubuntu\-24.04\-server\-amd64.iso \-\-out /tmp/out \e"
+.B "  \-\-hostname bastion \-\-username admin \-\-password secret \e"
+.B "  \-\-group sudo \-\-firewall \-\-allow\-port 22 \-\-docker \-\-no\-user\-interaction"
+Build a server ISO with user, firewall, and Docker configured.
+.TP
+.B "forgeiso diff \-\-base ubuntu.iso \-\-target custom.iso"
+List files changed between two ISOs.
+.SH FILES
+.TP
+.I ~/.cache/forgeiso/
+Engine workspace and ISO cache directory.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Set log verbosity (e.g. \fBRUST_LOG=debug forgeiso doctor\fP).
+.SH NOTES
+Builds require a Linux host with
+.B xorriso\fP,
+.B squashfs\-tools\fP,
+and
+.B mtools\fP
+installed. UEFI boot testing additionally requires
+.B qemu\-system\-x86_64\fP
+and
+.BR ovmf .
+.SH AUTHOR
+Jamal Al-Sarraf <https://github.com/jalsarraf0>
+.SH REPORTING BUGS
+https://github.com/jalsarraf0/ForgeISO/issues
+.SH COPYRIGHT
+Copyright (C) 2024\-2025 Jamal Al-Sarraf.
+License: Apache-2.0 <https://www.apache.org/licenses/LICENSE-2.0>
+.SH SEE ALSO
+.BR xorriso (1),
+.BR qemu\-system\-x86_64 (1),
+.BR cloud\-init (1)
