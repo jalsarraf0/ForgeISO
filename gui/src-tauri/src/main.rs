@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use forgeiso_engine::{BuildConfig, ForgeIsoEngine, IsoSource, ProfileKind};
+use forgeiso_engine::{
+    BuildConfig, ContainerConfig, FirewallConfig, ForgeIsoEngine, GrubConfig, InjectConfig,
+    IsoSource, NetworkConfig, ProfileKind, ProxyConfig, SshConfig, SwapConfig, UserConfig,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 use tokio::sync::Mutex;
@@ -9,6 +12,8 @@ use tokio::sync::Mutex;
 struct UiState {
     stream_started: Mutex<bool>,
 }
+
+// ── Build ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,13 +26,112 @@ struct BuildRequest {
     profile: String,
 }
 
+// ── Inject ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InjectRequest {
+    // Basic
+    source: String,
+    output_dir: String,
+    out_name: String,
+    output_label: Option<String>,
+    autoinstall_yaml: Option<String>,
+
+    // Identity
+    hostname: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    realname: Option<String>,
+
+    // SSH
+    ssh_keys: Vec<String>,
+    ssh_password_auth: bool,
+    ssh_install_server: bool,
+
+    // Network
+    dns_servers: Vec<String>,
+    ntp_servers: Vec<String>,
+    static_ip: Option<String>,
+    gateway: Option<String>,
+    http_proxy: Option<String>,
+    https_proxy: Option<String>,
+    no_proxy: Vec<String>,
+
+    // System
+    timezone: Option<String>,
+    locale: Option<String>,
+    keyboard_layout: Option<String>,
+
+    // Storage / APT
+    storage_layout: Option<String>,
+    apt_mirror: Option<String>,
+
+    // User & access management
+    groups: Vec<String>,
+    shell: Option<String>,
+    sudo_nopasswd: bool,
+    sudo_commands: Vec<String>,
+
+    // Firewall
+    firewall_enabled: bool,
+    firewall_policy: Option<String>,
+    allow_ports: Vec<String>,
+    deny_ports: Vec<String>,
+
+    // Services
+    enable_services: Vec<String>,
+    disable_services: Vec<String>,
+
+    // Kernel sysctl ("key=value" strings)
+    sysctl: Vec<String>,
+
+    // Swap
+    swap_size_mb: Option<u32>,
+    swap_file: Option<String>,
+    swappiness: Option<u8>,
+
+    // Containers
+    docker: bool,
+    podman: bool,
+    docker_users: Vec<String>,
+
+    // GRUB
+    grub_timeout: Option<u32>,
+    grub_cmdline: Vec<String>,
+    grub_default: Option<String>,
+
+    // Encryption
+    encrypt: bool,
+    encrypt_passphrase: Option<String>,
+
+    // Mounts (raw fstab lines)
+    mounts: Vec<String>,
+
+    // Packages & repos
+    packages: Vec<String>,
+    apt_repos: Vec<String>,
+
+    // Commands
+    run_commands: Vec<String>,
+    extra_late_commands: Vec<String>,
+
+    // Misc
+    no_user_interaction: bool,
+}
+
+// ── Tauri commands ───────────────────────────────────────────────────────────
+
 #[tauri::command]
 async fn doctor(engine: State<'_, ForgeIsoEngine>) -> Result<serde_json::Value, String> {
     serde_json::to_value(engine.doctor().await).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn inspect_source(engine: State<'_, ForgeIsoEngine>, source: String) -> Result<serde_json::Value, String> {
+async fn inspect_source(
+    engine: State<'_, ForgeIsoEngine>,
+    source: String,
+) -> Result<serde_json::Value, String> {
     let value = engine
         .inspect_source(&source, None)
         .await
@@ -36,17 +140,18 @@ async fn inspect_source(engine: State<'_, ForgeIsoEngine>, source: String) -> Re
 }
 
 #[tauri::command]
-async fn build_local(engine: State<'_, ForgeIsoEngine>, request: BuildRequest) -> Result<serde_json::Value, String> {
+async fn build_local(
+    engine: State<'_, ForgeIsoEngine>,
+    request: BuildRequest,
+) -> Result<serde_json::Value, String> {
     let cfg = BuildConfig {
         name: request.name,
         source: IsoSource::from_raw(request.source),
         overlay_dir: request
             .overlay_dir
-            .filter(|value| !value.trim().is_empty())
+            .filter(|v| !v.trim().is_empty())
             .map(PathBuf::from),
-        output_label: request
-            .output_label
-            .filter(|value| !value.trim().is_empty()),
+        output_label: request.output_label.filter(|v| !v.trim().is_empty()),
         profile: parse_profile(&request.profile)?,
         auto_scan: false,
         auto_test: false,
@@ -76,7 +181,6 @@ async fn scan_artifact(
         .scan(&artifact, policy.as_deref(), &out)
         .await
         .map_err(|e| e.to_string())?;
-
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
@@ -112,6 +216,127 @@ async fn render_report(
 }
 
 #[tauri::command]
+async fn inject_iso(
+    engine: State<'_, ForgeIsoEngine>,
+    request: InjectRequest,
+) -> Result<serde_json::Value, String> {
+    let opt_str = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
+
+    let sysctl: Vec<(String, String)> = request
+        .sysctl
+        .iter()
+        .filter_map(|s| {
+            let mut parts = s.splitn(2, '=');
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
+        })
+        .collect();
+
+    let cfg = InjectConfig {
+        source: IsoSource::from_raw(request.source),
+        out_name: request.out_name,
+        output_label: opt_str(request.output_label),
+        autoinstall_yaml: opt_str(request.autoinstall_yaml).map(PathBuf::from),
+        hostname: opt_str(request.hostname),
+        username: opt_str(request.username),
+        password: opt_str(request.password),
+        realname: opt_str(request.realname),
+        ssh: SshConfig {
+            authorized_keys: request.ssh_keys,
+            allow_password_auth: if request.ssh_password_auth { Some(true) } else { None },
+            install_server: if request.ssh_install_server { Some(true) } else { None },
+        },
+        network: NetworkConfig {
+            dns_servers: request.dns_servers,
+            ntp_servers: request.ntp_servers,
+        },
+        static_ip: opt_str(request.static_ip),
+        gateway: opt_str(request.gateway),
+        proxy: ProxyConfig {
+            http_proxy: opt_str(request.http_proxy),
+            https_proxy: opt_str(request.https_proxy),
+            no_proxy: request.no_proxy,
+        },
+        timezone: opt_str(request.timezone),
+        locale: opt_str(request.locale),
+        keyboard_layout: opt_str(request.keyboard_layout),
+        storage_layout: opt_str(request.storage_layout),
+        apt_mirror: opt_str(request.apt_mirror),
+        extra_packages: request.packages,
+        wallpaper: None,
+        extra_late_commands: request.extra_late_commands,
+        no_user_interaction: request.no_user_interaction,
+        user: UserConfig {
+            groups: request.groups,
+            shell: opt_str(request.shell),
+            sudo_nopasswd: request.sudo_nopasswd,
+            sudo_commands: request.sudo_commands,
+        },
+        firewall: FirewallConfig {
+            enabled: request.firewall_enabled,
+            default_policy: opt_str(request.firewall_policy),
+            allow_ports: request.allow_ports,
+            deny_ports: request.deny_ports,
+        },
+        enable_services: request.enable_services,
+        disable_services: request.disable_services,
+        sysctl,
+        swap: request.swap_size_mb.map(|mb| SwapConfig {
+            size_mb: mb,
+            filename: opt_str(request.swap_file),
+            swappiness: request.swappiness,
+        }),
+        apt_repos: request.apt_repos,
+        containers: ContainerConfig {
+            docker: request.docker,
+            podman: request.podman,
+            docker_users: request.docker_users,
+        },
+        grub: GrubConfig {
+            timeout: request.grub_timeout,
+            cmdline_extra: request.grub_cmdline,
+            default_entry: opt_str(request.grub_default),
+        },
+        encrypt: request.encrypt,
+        encrypt_passphrase: opt_str(request.encrypt_passphrase),
+        mounts: request.mounts,
+        run_commands: request.run_commands,
+    };
+
+    let out = PathBuf::from(request.output_dir);
+    let result = engine
+        .inject_autoinstall(&cfg, &out)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn verify_iso(
+    engine: State<'_, ForgeIsoEngine>,
+    source: String,
+    sums_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let result = engine
+        .verify(&source, sums_url.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn diff_isos(
+    engine: State<'_, ForgeIsoEngine>,
+    base: String,
+    target: String,
+) -> Result<serde_json::Value, String> {
+    let result = engine
+        .diff_isos(PathBuf::from(base).as_path(), PathBuf::from(target).as_path())
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn start_event_stream(
     app: tauri::AppHandle,
     engine: State<'_, ForgeIsoEngine>,
@@ -139,13 +364,17 @@ async fn start_event_stream(
     Ok(())
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 fn parse_profile(raw: &str) -> Result<ProfileKind, String> {
     match raw {
         "minimal" => Ok(ProfileKind::Minimal),
         "desktop" => Ok(ProfileKind::Desktop),
-        _ => Err("unsupported profile".to_string()),
+        _ => Err(format!("unsupported profile: {raw}")),
     }
 }
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
     tauri::Builder::default()
@@ -158,7 +387,10 @@ fn main() {
             scan_artifact,
             test_iso,
             render_report,
-            start_event_stream
+            inject_iso,
+            verify_iso,
+            diff_isos,
+            start_event_stream,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ForgeISO GUI");
