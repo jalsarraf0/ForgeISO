@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Verify that all expected release artifacts exist and are non-empty
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,43 +9,37 @@ ROOT_DIR="$(forgeiso_root_dir)"
 VERSION="$(forgeiso_release_version "${ROOT_DIR}" "${1:-}")"
 RELEASE_DIR="$(forgeiso_release_dir "${ROOT_DIR}")"
 
-require_file() {
+PASS=0
+FAIL=0
+
+check_file() {
   local path="$1"
-  if [[ ! -f "${path}" ]]; then
-    echo "missing required release artifact: ${path}" >&2
-    exit 1
+  local desc="$2"
+  if [[ -f "${path}" && -s "${path}" ]]; then
+    printf "  ✓ %-50s  %s\n" "${desc}" "$(ls -lh "${path}" | awk '{print $5}')"
+    (( PASS++ )) || true
+  else
+    printf "  ✗ %-50s  MISSING OR EMPTY\n" "${desc}" >&2
+    (( FAIL++ )) || true
   fi
 }
 
-require_glob() {
-  local pattern="$1"
-  shopt -s nullglob
-  local matches=(${pattern})
-  shopt -u nullglob
-  if (( ${#matches[@]} == 0 )); then
-    echo "missing required release artifact pattern: ${pattern}" >&2
-    exit 1
-  fi
-}
+echo "ForgeISO ${VERSION} — release verification"
+echo "Release dir: ${RELEASE_DIR}"
+echo ""
 
-if [[ ! -d "${RELEASE_DIR}" ]]; then
-  echo "release directory not found: ${RELEASE_DIR}" >&2
+check_file "${RELEASE_DIR}/forgeiso-${VERSION}-linux-x86_64.tar.gz"  "Tarball (linux-x86_64)"
+check_file "${RELEASE_DIR}/forgeiso-${VERSION}-1.x86_64.rpm"         "RPM (Fedora/RHEL/openSUSE)"
+check_file "${RELEASE_DIR}/forgeiso_${VERSION}-1_amd64.deb"          "DEB (Debian/Ubuntu)"
+check_file "${RELEASE_DIR}/forgeiso-${VERSION}-1-x86_64.pkg.tar.zst" "Pacman (Arch Linux)"
+check_file "${RELEASE_DIR}/checksums.txt"                              "SHA-256 checksums"
+
+echo ""
+echo "Results: ${PASS} passed, ${FAIL} failed"
+
+if (( FAIL > 0 )); then
+  echo "Release verification FAILED — run make-packages.sh to rebuild." >&2
   exit 1
 fi
 
-require_file "${RELEASE_DIR}/forgeiso-${VERSION}-linux-x86_64.tar.gz"
-require_file "${RELEASE_DIR}/forgeiso-gui"
-require_file "${RELEASE_DIR}/checksums.txt"
-
-if find "${RELEASE_DIR}" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
-  echo "release directory contains unexpected subdirectories" >&2
-  find "${RELEASE_DIR}" -mindepth 1 -maxdepth 1 -type d >&2
-  exit 1
-fi
-
-if [[ ! -s "${RELEASE_DIR}/checksums.txt" ]]; then
-  echo "checksums.txt is empty" >&2
-  exit 1
-fi
-
-echo "Release verification passed for version ${VERSION}"
+echo "✓ Release verification passed for ForgeISO ${VERSION}"

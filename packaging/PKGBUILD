@@ -1,0 +1,29 @@
+# Maintainer: Jamal Al-Sarraf <https://github.com/jalsarraf0>
+pkgname=forgeiso
+pkgver=0.3.1
+pkgrel=1
+pkgdesc="Linux ISO builder and autoinstall injection tool"
+arch=('x86_64')
+url="https://github.com/jalsarraf0/ForgeISO"
+license=('Apache-2.0')
+depends=('xorriso' 'squashfs-tools' 'mtools')
+optdepends=(
+  'qemu: BIOS/UEFI smoke testing'
+  'ovmf: UEFI smoke testing'
+  'trivy: vulnerability scanning'
+  'syft: SBOM generation'
+)
+source=("${pkgname}-${pkgver}-linux-x86_64.tar.gz::https://github.com/jalsarraf0/ForgeISO/releases/download/v${pkgver}/${pkgname}-${pkgver}-linux-x86_64.tar.gz")
+sha256sums=('SKIP')  # Replace with actual sha256 after release
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}-linux-x86_64"
+
+  install -Dm755 "bin/forgeiso"     "${pkgdir}/usr/bin/forgeiso"
+  install -Dm755 "bin/forgeiso-tui" "${pkgdir}/usr/bin/forgeiso-tui"
+  install -Dm644 "README.md"        "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+  if [[ -f "VERSION" ]]; then
+    install -Dm644 "VERSION" "${pkgdir}/usr/share/doc/${pkgname}/VERSION"
+  fi
+}
