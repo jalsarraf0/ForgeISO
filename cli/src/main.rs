@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use forgeiso_engine::{
-    BuildConfig, EventPhase, ForgeIsoEngine, InjectConfig, IsoSource, ProfileKind,
+    BuildConfig, EventPhase, ForgeIsoEngine, InjectConfig, IsoSource, NetworkConfig, ProfileKind,
+    SshConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -13,6 +14,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     Doctor {
         #[arg(long)]
@@ -78,13 +80,70 @@ enum Commands {
         #[arg(long)]
         source: String,
         #[arg(long)]
-        autoinstall: PathBuf,
+        autoinstall: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
         #[arg(long)]
         name: Option<String>,
         #[arg(long)]
         volume_label: Option<String>,
+
+        // Identity
+        #[arg(long)]
+        hostname: Option<String>,
+        #[arg(long)]
+        username: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+        #[arg(long)]
+        password_stdin: bool,
+        #[arg(long)]
+        realname: Option<String>,
+
+        // SSH
+        #[arg(long, action = clap::ArgAction::Append)]
+        ssh_key: Vec<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        ssh_key_file: Vec<PathBuf>,
+        #[arg(long)]
+        ssh_password_auth: bool,
+
+        // Network
+        #[arg(long, action = clap::ArgAction::Append)]
+        dns: Vec<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        ntp_server: Vec<String>,
+
+        // System
+        #[arg(long)]
+        timezone: Option<String>,
+        #[arg(long)]
+        locale: Option<String>,
+        #[arg(long)]
+        keyboard_layout: Option<String>,
+
+        // Storage/Apt
+        #[arg(long)]
+        storage_layout: Option<String>,
+        #[arg(long)]
+        apt_mirror: Option<String>,
+
+        // Packages
+        #[arg(long, action = clap::ArgAction::Append)]
+        package: Vec<String>,
+
+        // Branding
+        #[arg(long)]
+        wallpaper: Option<PathBuf>,
+
+        // Escape hatches
+        #[arg(long, action = clap::ArgAction::Append)]
+        late_command: Vec<String>,
+        #[arg(long)]
+        no_user_interaction: bool,
+
         #[arg(long)]
         json: bool,
     },
@@ -286,13 +345,72 @@ async fn main() -> anyhow::Result<()> {
             out,
             name,
             volume_label,
+            hostname,
+            username,
+            password,
+            password_file,
+            password_stdin,
+            realname,
+            ssh_key,
+            ssh_key_file,
+            ssh_password_auth,
+            dns,
+            ntp_server,
+            timezone,
+            locale,
+            keyboard_layout,
+            storage_layout,
+            apt_mirror,
+            package,
+            wallpaper,
+            late_command,
+            no_user_interaction,
             json,
         } => {
+            // Resolve password (priority: stdin > file > cli arg)
+            let resolved_password = if password_stdin {
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf)?;
+                Some(buf.trim().to_string())
+            } else if let Some(ref pf) = password_file {
+                Some(std::fs::read_to_string(pf)?.trim().to_string())
+            } else {
+                password
+            };
+
+            // Read SSH keys from files
+            let mut all_ssh_keys = ssh_key;
+            for kf in ssh_key_file {
+                all_ssh_keys.push(std::fs::read_to_string(&kf)?.trim().to_string());
+            }
+
             let cfg = InjectConfig {
                 source: IsoSource::from_raw(source),
                 autoinstall_yaml: autoinstall,
                 out_name: name.unwrap_or_else(|| "injected.iso".to_string()),
                 output_label: volume_label,
+                hostname,
+                username,
+                password: resolved_password,
+                realname,
+                ssh: SshConfig {
+                    authorized_keys: all_ssh_keys,
+                    allow_password_auth: if ssh_password_auth { Some(true) } else { None },
+                    install_server: None,
+                },
+                network: NetworkConfig {
+                    dns_servers: dns,
+                    ntp_servers: ntp_server,
+                },
+                timezone,
+                locale,
+                keyboard_layout,
+                storage_layout,
+                apt_mirror,
+                extra_packages: package,
+                wallpaper,
+                extra_late_commands: late_command,
+                no_user_interaction,
             };
             let result = engine.inject_autoinstall(&cfg, &out).await?;
             if json {

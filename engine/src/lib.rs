@@ -1,3 +1,4 @@
+pub mod autoinstall;
 pub mod config;
 pub mod error;
 pub mod events;
@@ -7,9 +8,10 @@ pub mod report;
 pub mod scanner;
 pub mod workspace;
 
+pub use autoinstall::{generate_autoinstall_yaml, hash_password, merge_autoinstall_yaml};
 pub use config::{
-    BuildConfig, Distro, InjectConfig, IsoSource, ProfileKind, ScanPolicy, TestingPolicy,
-    ToolStatus,
+    BuildConfig, Distro, InjectConfig, IsoSource, NetworkConfig, ProfileKind, ScanPolicy,
+    SshConfig, TestingPolicy, ToolStatus,
 };
 pub use error::{EngineError, EngineResult};
 pub use events::{EngineEvent, EventLevel, EventPhase};

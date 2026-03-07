@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::broadcast;
 use walkdir::WalkDir;
 
+use crate::autoinstall::{generate_autoinstall_yaml, merge_autoinstall_yaml};
 use crate::config::{BuildConfig, IsoSource};
 use crate::error::{EngineError, EngineResult};
 use crate::events::{EngineEvent, EventPhase};
@@ -646,9 +647,15 @@ impl ForgeIsoEngine {
         let nocloud_dir = work_dir.join("overlay").join("nocloud");
         std::fs::create_dir_all(&nocloud_dir)?;
 
-        // Copy user-data
-        let user_data = std::fs::read_to_string(&cfg.autoinstall_yaml)?;
-        std::fs::write(nocloud_dir.join("user-data"), user_data)?;
+        // Generate or merge user-data
+        let user_data = match &cfg.autoinstall_yaml {
+            Some(path) => {
+                let existing = std::fs::read_to_string(path)?;
+                merge_autoinstall_yaml(&existing, cfg)?
+            }
+            None => generate_autoinstall_yaml(cfg)?,
+        };
+        std::fs::write(nocloud_dir.join("user-data"), &user_data)?;
 
         // Create meta-data (required by cloud-init, can be empty)
         std::fs::write(nocloud_dir.join("meta-data"), "")?;
@@ -657,6 +664,16 @@ impl ForgeIsoEngine {
             EventPhase::Inject,
             "created cloud-init overlay",
         ));
+
+        // Copy wallpaper file if provided
+        if let Some(src) = &cfg.wallpaper {
+            let fname = src
+                .file_name()
+                .ok_or_else(|| EngineError::InvalidConfig("invalid wallpaper path".to_string()))?;
+            let dest = work_dir.join("wallpaper");
+            std::fs::create_dir_all(&dest)?;
+            std::fs::copy(src, dest.join(fname))?;
+        }
 
         // Extract ISO
         let extract_dir = work_dir.join("extract");
@@ -698,6 +715,14 @@ impl ForgeIsoEngine {
             EventPhase::Inject,
             "injected cloud-init files",
         ));
+
+        // Copy wallpaper file to extracted ISO if provided
+        if let Some(src) = &cfg.wallpaper {
+            let fname = src.file_name().unwrap();
+            let iso_wp = extract_dir.join("cdrom").join("wallpaper");
+            std::fs::create_dir_all(&iso_wp)?;
+            std::fs::copy(work_dir.join("wallpaper").join(fname), iso_wp.join(fname))?;
+        }
 
         // Patch boot configurations (grub.cfg and isolinux.cfg)
         let kernel_append = " autoinstall ds=nocloud;s=/cdrom/nocloud/";
