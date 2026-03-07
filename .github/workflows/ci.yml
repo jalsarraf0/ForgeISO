@@ -112,7 +112,9 @@ jobs:
             .
 
       # ── Run the stage in a fresh ephemeral container ──────────────────────
-      # Source is mounted read-only. Cargo target is isolated per stage.
+      # Source is mounted writable — Cargo creates .cargo-tmp scratch files
+      # in the workspace; :ro causes "Read-only file system" errors.
+      # Build isolation is provided by per-stage CARGO_TARGET_DIR volumes.
       # Container is deleted immediately after (--rm).
       - name: Run ${{ matrix.id }} (ephemeral container)
         run: |
@@ -121,7 +123,7 @@ jobs:
             -e CI=true \
             -e CARGO_TARGET_DIR=/ci-target \
             -e CARGO_HOME=/ci-cargo \
-            -v "$PWD:/workspace:ro" \
+            -v "$PWD:/workspace" \
             -v "forgeiso-ci-${{ matrix.id }}-target:/ci-target" \
             -v "forgeiso-ci-${{ matrix.id }}-cargo:/ci-cargo" \
             forgeiso-${{ matrix.id }} \
