@@ -333,8 +333,7 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
 
         if let Some(static_ip) = &cfg.static_ip {
             any.insert("dhcp4".into(), serde_yaml::Value::Bool(false));
-            let mut addresses = serde_yaml::Sequence::new();
-            addresses.push(serde_yaml::Value::String(static_ip.clone()));
+            let addresses = vec![serde_yaml::Value::String(static_ip.clone())];
             any.insert("addresses".into(), serde_yaml::Value::Sequence(addresses));
 
             if let Some(gateway) = &cfg.gateway {
@@ -613,8 +612,7 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
 
             if let Some(static_ip) = &cfg.static_ip {
                 any.insert("dhcp4".into(), serde_yaml::Value::Bool(false));
-                let mut addresses = serde_yaml::Sequence::new();
-                addresses.push(serde_yaml::Value::String(static_ip.clone()));
+                let addresses = vec![serde_yaml::Value::String(static_ip.clone())];
                 any.insert("addresses".into(), serde_yaml::Value::Sequence(addresses));
 
                 if let Some(gateway) = &cfg.gateway {
