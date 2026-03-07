@@ -36,12 +36,14 @@ export const initialState: AppState = {
   lastSourceIso:    '',
   lastOutputDir:    './artifacts',
   lastInjectedIso:  '',
+  lastDistro:       'ubuntu',
 };
 
 // ── Action types ──────────────────────────────────────────────────────────────
 
 export type AppAction =
   | { type: 'SET_STAGE'; stage: AppStage }
+  | { type: 'SET_DISTRO'; distro: string }
   | { type: 'SET_DOCTOR'; doctor: DoctorReport }
   | { type: 'APPEND_LOG'; entry: LogEntry }
   | { type: 'CLEAR_LOGS' }
@@ -55,7 +57,8 @@ export type AppAction =
   | { type: 'SET_DIFF_RESULT'; result: IsoDiff }
   | { type: 'SET_ISO9660_RESULT'; result: Iso9660Compliance }
   | { type: 'ADVANCE_STAGE'; from: AppStage }
-  | { type: 'RESET_STAGE'; stage: AppStage };
+  | { type: 'RESET_STAGE'; stage: AppStage }
+  | { type: 'RESET_ALL' };
 
 // ── Stage ordering ────────────────────────────────────────────────────────────
 
@@ -83,6 +86,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
       return { ...state, activeStage: action.stage, stageStatus: newStatus };
     }
+
+    case 'SET_DISTRO':
+      return { ...state, lastDistro: action.distro };
 
     case 'SET_DOCTOR':
       return { ...state, doctor: action.doctor };
@@ -181,8 +187,21 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'RESET_STAGE': {
       const newStatus = { ...state.stageStatus, [action.stage]: 'pending' as StageStatus };
-      const extra = action.stage === 'verify' ? { iso9660Result: null } : {};
-      return { ...state, stageStatus: newStatus, progress: null, ...extra };
+      const resultClear: Partial<AppState> = {};
+      if (action.stage === 'build')      resultClear.buildResult   = null;
+      if (action.stage === 'inject')     resultClear.injectResult  = null;
+      if (action.stage === 'verify')     { resultClear.verifyResult = null; resultClear.iso9660Result = null; }
+      if (action.stage === 'diff')       resultClear.diffResult    = null;
+      return { ...state, stageStatus: newStatus, progress: null, ...resultClear };
+    }
+
+    case 'RESET_ALL': {
+      return {
+        ...initialState,
+        // preserve doctor and logs across pipeline resets
+        doctor: state.doctor,
+        logs: state.logs,
+      };
     }
 
     default:

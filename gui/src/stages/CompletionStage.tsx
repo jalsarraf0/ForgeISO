@@ -48,14 +48,7 @@ export function CompletionStage({
 }) {
   const hasAnything = buildResult || injectResult || verifyResult || diffResult || iso9660Result;
 
-  const resetAll = () => {
-    dispatch({ type: 'SET_STAGE', stage: 'build' });
-    dispatch({ type: 'RESET_STAGE', stage: 'build' });
-    dispatch({ type: 'RESET_STAGE', stage: 'inject' });
-    dispatch({ type: 'RESET_STAGE', stage: 'verify' });
-    dispatch({ type: 'RESET_STAGE', stage: 'diff' });
-    dispatch({ type: 'RESET_STAGE', stage: 'completion' });
-  };
+  const resetAll = () => dispatch({ type: 'RESET_ALL' });
 
   return (
     <div className="main-content">

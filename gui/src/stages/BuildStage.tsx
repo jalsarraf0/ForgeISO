@@ -29,6 +29,7 @@ export function BuildStage({
   progress,
   lastSourceIso,
   lastOutputDir,
+  lastDistro,
   buildResult,
 }: {
   dispatch: Dispatch<AppAction>;
@@ -36,6 +37,7 @@ export function BuildStage({
   progress: JobProgress | null;
   lastSourceIso: string;
   lastOutputDir: string;
+  lastDistro: string;
   buildResult: BuildResult | null;
 }) {
   const [source, setSource] = useState(lastSourceIso);
@@ -44,7 +46,7 @@ export function BuildStage({
   const [overlayDir, setOverlayDir] = useState('');
   const [outputLabel, setOutputLabel] = useState('');
   const [profile, setProfile] = useState('minimal');
-  const [selectedDistro, setSelectedDistro] = useState('ubuntu');
+  const [selectedDistro, setSelectedDistro] = useState(lastDistro || 'ubuntu');
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [statusKind, setStatusKind] = useState<'ok' | 'err' | ''>('');
@@ -170,7 +172,7 @@ export function BuildStage({
                   d.id === selectedDistro ? 'selected' : '',
                   !isSupported ? 'disabled' : '',
                 ].filter(Boolean).join(' ')}
-                onClick={() => isSupported && setSelectedDistro(d.id)}
+                onClick={() => { if (isSupported) { setSelectedDistro(d.id); dispatch({ type: 'SET_DISTRO', distro: d.id }); } }}
               >
                 <div className="distro-icon">{d.iconChar}</div>
                 <div className="distro-name">{d.label}</div>

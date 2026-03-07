@@ -134,6 +134,7 @@ export function App() {
           progress={state.progress}
           lastSourceIso={state.lastSourceIso}
           lastOutputDir={state.lastOutputDir}
+          lastDistro={state.lastDistro}
           buildResult={state.buildResult}
         />
       )}
@@ -144,6 +145,7 @@ export function App() {
           progress={state.progress}
           lastSourceIso={state.lastSourceIso}
           lastOutputDir={state.lastOutputDir}
+          lastDistro={state.lastDistro}
           injectResult={state.injectResult}
         />
       )}

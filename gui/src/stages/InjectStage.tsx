@@ -35,6 +35,7 @@ export function InjectStage({
   progress,
   lastSourceIso,
   lastOutputDir,
+  lastDistro,
   injectResult,
 }: {
   dispatch: Dispatch<AppAction>;
@@ -42,18 +43,28 @@ export function InjectStage({
   progress: JobProgress | null;
   lastSourceIso: string;
   lastOutputDir: string;
+  lastDistro: string;
   injectResult: InjectResult | null;
 }) {
   const [inj, formDispatch] = useReducer(injectFormReducer, {
     ...defaultInjectState,
     source: lastSourceIso || defaultInjectState.source,
     outputDir: lastOutputDir || defaultInjectState.outputDir,
+    distro: lastDistro || defaultInjectState.distro,
   });
 
   const set = <K extends keyof InjectState>(key: K) =>
     (value: InjectState[K]) => formDispatch({ key, value });
 
   const { toggle, is } = useAccordion(['basic', 'identity', 'ssh', 'network']);
+
+  // Distro-aware label helpers (no layout changes — only text)
+  const isFedora = inj.distro === 'fedora';
+  const isArch   = inj.distro === 'arch';
+  const pkgLabel    = isFedora ? 'Packages & DNF Repos' : isArch ? 'Packages (pacman)' : 'Packages & APT Repos';
+  const mirrorLabel = isFedora ? 'DNF mirror URL (baseurl)' : isArch ? 'Pacman mirror URL' : 'APT mirror URL';
+  const repoLabel   = isFedora ? 'DNF repos (.repo content, one per line)' : isArch ? 'N/A for Arch (use Pacman mirror above)' : 'APT repos (PPA or deb line, one per line)';
+  const firewallTitle = isFedora ? 'Firewall (firewalld)' : isArch ? 'Firewall (iptables/nftables)' : 'Firewall (UFW)';
 
   const [statusMsg, setStatusMsg] = useState('');
   const [statusKind, setStatusKind] = useState<'ok' | 'err' | ''>('');
@@ -293,8 +304,8 @@ export function InjectStage({
               <option value="zfs">ZFS</option>
             </select>
           </Field>
-          <Field label="APT mirror URL">
-            <TextInput value={inj.aptMirror} onChange={set('aptMirror')} placeholder="http://archive.ubuntu.com/ubuntu" disabled={isRunning} />
+          <Field label={mirrorLabel}>
+            <TextInput value={inj.aptMirror} onChange={set('aptMirror')} placeholder={isFedora ? 'https://mirror.example.com/fedora/' : isArch ? 'https://mirror.example.com/archlinux/' : 'http://archive.ubuntu.com/ubuntu'} disabled={isRunning} />
           </Field>
           <div className="span-2">
             <Toggle label="Enable LUKS full-disk encryption" checked={inj.encrypt} onChange={set('encrypt')} disabled={isRunning} />
@@ -324,7 +335,7 @@ export function InjectStage({
         </div>
       </Accordion>
 
-      <Accordion id="firewall" icon="🛡️" title="Firewall (UFW)" summary="UFW rules, ports" open={is('firewall')} onToggle={toggle}>
+      <Accordion id="firewall" icon="🛡️" title={firewallTitle} summary="Firewall rules, ports" open={is('firewall')} onToggle={toggle}>
         <div className="field-grid">
           <div className="span-2">
             <Toggle label="Enable UFW firewall" checked={inj.firewallEnabled} onChange={set('firewallEnabled')} disabled={isRunning} />
@@ -403,13 +414,13 @@ export function InjectStage({
         </div>
       </Accordion>
 
-      <Accordion id="packages" icon="📦" title="Packages & APT Repos" summary="Extra packages, PPAs" open={is('packages')} onToggle={toggle}>
+      <Accordion id="packages" icon="📦" title={pkgLabel} summary="Extra packages, repos" open={is('packages')} onToggle={toggle}>
         <div className="field-grid">
           <Field label="Extra packages (one per line)">
             <TextArea value={inj.packages} onChange={set('packages')} placeholder={'curl\ngit\nvim\nhtop'} rows={4} disabled={isRunning} />
           </Field>
-          <Field label="APT repos (PPA or deb line, one per line)">
-            <TextArea value={inj.aptRepos} onChange={set('aptRepos')} placeholder={'ppa:deadsnakes/ppa\ndeb https://dl.google.com/linux/chrome/deb/ stable main'} rows={4} disabled={isRunning} />
+          <Field label={repoLabel}>
+            <TextArea value={inj.aptRepos} onChange={set('aptRepos')} placeholder={isFedora ? '[google-chrome]\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\ngpgcheck=1' : isArch ? '' : 'ppa:deadsnakes/ppa\ndeb https://dl.google.com/linux/chrome/deb/ stable main'} rows={4} disabled={isRunning || isArch} />
           </Field>
         </div>
       </Accordion>

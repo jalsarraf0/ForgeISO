@@ -136,6 +136,7 @@ export type AppState = {
   lastSourceIso: string;
   lastOutputDir: string;
   lastInjectedIso: string;
+  lastDistro: string;
 };
 
 // ── Inject form state ─────────────────────────────────────────────────────────
@@ -267,6 +268,36 @@ export const INJECT_PRESETS: InjectPreset[] = [
       sshPasswordAuth: false, sudoNopasswd: false,
       sysctl: 'net.ipv4.ip_forward=0\nkernel.dmesg_restrict=1\nnet.ipv4.conf.all.rp_filter=1',
       enableServices: 'auditd\nfail2ban',
+      noUserInteraction: true,
+    },
+  },
+  {
+    id: 'fedora-minimal',
+    label: 'Fedora Server',
+    description: 'Fedora minimal server with Kickstart (ks.cfg) injection.',
+    overrides: {
+      distro: 'fedora',
+      username: 'admin',
+      packages: 'curl\ngit\nvim\nbash-completion',
+      firewallEnabled: true, allowPorts: '22',
+      storageLayout: 'lvm',
+      sshInstallServer: true, sshPasswordAuth: false,
+      noUserInteraction: true,
+    },
+  },
+  {
+    id: 'arch-minimal',
+    label: 'Arch Linux',
+    description: 'Arch minimal install via archinstall JSON config injection.',
+    overrides: {
+      distro: 'arch',
+      username: 'arch',
+      packages: 'base\nbase-devel\nvim\ncurl\ngit',
+      timezone: 'UTC',
+      locale: 'en_US.UTF-8',
+      keyboardLayout: 'us',
+      sshInstallServer: true, sshPasswordAuth: false,
+      storageLayout: 'direct',
       noUserInteraction: true,
     },
   },
