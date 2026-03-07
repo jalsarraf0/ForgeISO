@@ -791,7 +791,12 @@ impl ForgeIsoEngine {
 
                 // Wallpaper
                 if let Some(src) = &cfg.wallpaper {
-                    let fname = src.file_name().unwrap();
+                    let fname = src.file_name().ok_or_else(|| {
+                        EngineError::InvalidConfig(format!(
+                            "wallpaper path has no filename: {}",
+                            src.display()
+                        ))
+                    })?;
                     let iso_wp = extract_dir.join("cdrom").join("wallpaper");
                     std::fs::create_dir_all(&iso_wp)?;
                     std::fs::copy(work_dir.join("wallpaper").join(fname), iso_wp.join(fname))?;

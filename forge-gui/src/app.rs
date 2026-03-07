@@ -160,6 +160,7 @@ pub struct ForgeApp {
     job_running: bool,
     job_phase: String,
     job_pct: Option<f32>,
+    current_task: Option<tokio::task::JoinHandle<()>>,
     // Forms
     inject: InjectState,
     verify: VerifyState,
@@ -260,6 +261,7 @@ impl ForgeApp {
             job_running: false,
             job_phase: String::new(),
             job_pct: None,
+            current_task: None,
             inject: persisted.inject,
             verify: persisted.verify,
             diff: persisted.diff,
@@ -325,7 +327,6 @@ impl ForgeApp {
                     } else {
                         LogLevel::Info
                     },
-                    percent,
                     timestamp: now_ts(),
                 });
             }
@@ -430,7 +431,6 @@ impl ForgeApp {
                     phase: "Error".into(),
                     message: e.clone(),
                     level: LogLevel::Error,
-                    percent: None,
                     timestamp: now_ts(),
                 });
                 self.set_status(StatusMsg::err(e));
@@ -456,13 +456,22 @@ impl ForgeApp {
         self.status = Some(msg);
     }
 
+    fn cancel_job(&mut self) {
+        if let Some(handle) = self.current_task.take() {
+            handle.abort();
+        }
+        self.job_running = false;
+        self.job_pct = None;
+        self.set_status(StatusMsg::ok("Cancelled"));
+    }
+
     fn spawn_inject(&mut self) {
         self.start_job("Injecting autoinstall…");
         let engine = Arc::clone(&self.engine);
         let tx = self.tx.clone();
         let inject = self.inject.clone();
         let out = PathBuf::from(&inject.output_dir);
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             let cfg = build_inject_config(&inject);
             match engine.inject_autoinstall(&cfg, &out).await {
                 Ok(r) => {
@@ -472,7 +481,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_verify(&mut self) {
@@ -481,7 +490,7 @@ impl ForgeApp {
         let tx = self.tx.clone();
         let source = self.verify.source.clone();
         let sums = opt(&self.verify.sums_url);
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.verify(&source, sums.as_deref()).await {
                 Ok(r) => {
                     let _ = tx.send(WorkerMsg::VerifyOk(Box::new(r)));
@@ -490,7 +499,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_iso9660(&mut self) {
@@ -498,7 +507,7 @@ impl ForgeApp {
         let engine = Arc::clone(&self.engine);
         let tx = self.tx.clone();
         let source = self.verify.source.clone();
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.validate_iso9660(&source).await {
                 Ok(r) => {
                     let _ = tx.send(WorkerMsg::Iso9660Ok(Box::new(r)));
@@ -507,7 +516,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_diff(&mut self) {
@@ -516,7 +525,7 @@ impl ForgeApp {
         let tx = self.tx.clone();
         let base = PathBuf::from(&self.diff.base);
         let target = PathBuf::from(&self.diff.target);
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.diff_isos(&base, &target).await {
                 Ok(r) => {
                     let _ = tx.send(WorkerMsg::DiffOk(Box::new(r)));
@@ -525,7 +534,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_build(&mut self) {
@@ -534,7 +543,7 @@ impl ForgeApp {
         let tx = self.tx.clone();
         let b = self.build.clone();
         let out = PathBuf::from(&b.output_dir);
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             let cfg = BuildConfig {
                 name: b.build_name.clone(),
                 source: IsoSource::from_raw(&b.source),
@@ -559,7 +568,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_inspect(&mut self) {
@@ -567,7 +576,7 @@ impl ForgeApp {
         let engine = Arc::clone(&self.engine);
         let tx = self.tx.clone();
         let source = self.build.source.clone();
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.inspect_source(&source, None).await {
                 Ok(m) => {
                     let _ = tx.send(WorkerMsg::InspectOk(Box::new(m)));
@@ -576,17 +585,17 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_doctor(&mut self) {
         self.start_job("Running dependency check…");
         let engine = Arc::clone(&self.engine);
         let tx = self.tx.clone();
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             let r = engine.doctor().await;
             let _ = tx.send(WorkerMsg::DoctorOk(Box::new(r)));
-        });
+        }));
     }
 
     fn spawn_scan(&mut self) {
@@ -602,7 +611,7 @@ impl ForgeApp {
             .parent()
             .map(|p| p.join("scan"))
             .unwrap_or_else(|| PathBuf::from("scan"));
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.scan(&iso, None, &out).await {
                 Ok(_) => {
                     let _ = tx.send(WorkerMsg::ScanOk);
@@ -611,7 +620,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_test_iso(&mut self) {
@@ -627,7 +636,7 @@ impl ForgeApp {
             .parent()
             .map(|p| p.join("test"))
             .unwrap_or_else(|| PathBuf::from("test"));
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.test_iso(&iso, true, true, &out).await {
                 Ok(_) => {
                     let _ = tx.send(WorkerMsg::TestOk);
@@ -636,7 +645,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     fn spawn_report(&mut self, format: &str) {
@@ -649,7 +658,7 @@ impl ForgeApp {
             .map(|r| r.output_dir.clone())
             .unwrap_or_default();
         let fmt = format.to_string();
-        self.rt.spawn(async move {
+        self.current_task = Some(self.rt.spawn(async move {
             match engine.report(&build_dir, &fmt).await {
                 Ok(p) => {
                     let _ = tx.send(WorkerMsg::ReportOk(p.to_string_lossy().into_owned()));
@@ -658,7 +667,7 @@ impl ForgeApp {
                     let _ = tx.send(WorkerMsg::OpError(e.to_string()));
                 }
             }
-        });
+        }));
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
@@ -899,6 +908,7 @@ impl ForgeApp {
     }
 
     fn render_log_panel(&mut self, ctx: &egui::Context) {
+        let mut do_cancel = false;
         egui::TopBottomPanel::bottom("log_panel")
             .resizable(true)
             .min_height(24.0)
@@ -952,6 +962,9 @@ impl ForgeApp {
                             ui.spinner();
                         }
                         ui.label(RichText::new(&self.job_phase).size(11.0).color(MUTED));
+                        if ghost_btn(ui, "✕ Cancel", true) {
+                            do_cancel = true;
+                        }
                     }
                     if self.log_open {
                         ui.add_space(8.0);
@@ -1014,6 +1027,9 @@ impl ForgeApp {
                         });
                 }
             });
+        if do_cancel {
+            self.cancel_job();
+        }
     }
 
     fn stage_done(&self, stage: &Stage) -> bool {

@@ -51,17 +51,6 @@ impl Stage {
             Stage::Completion => 5,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn next(&self) -> Option<Stage> {
-        match self {
-            Stage::Inject => Some(Stage::Verify),
-            Stage::Verify => Some(Stage::Diff),
-            Stage::Diff => Some(Stage::Build),
-            Stage::Build => Some(Stage::Completion),
-            Stage::Completion => None,
-        }
-    }
 }
 
 // ── File picker target ─────────────────────────────────────────────────────────
@@ -92,7 +81,7 @@ pub struct InjectState {
     // Identity
     pub hostname: String,
     pub username: String,
-    #[serde(skip)]
+    #[serde(skip)] // never persist passwords to disk
     pub password: String,
     pub realname: String,
     // SSH
@@ -131,9 +120,6 @@ pub struct InjectState {
     // Misc
     pub no_user_interaction: bool,
     pub wallpaper_path: String,
-    // Accordion open state
-    #[allow(dead_code)]
-    pub adv_open: bool,
 }
 
 impl Default for InjectState {
@@ -176,7 +162,6 @@ impl Default for InjectState {
             swap_size_mb: String::new(),
             no_user_interaction: false,
             wallpaper_path: String::new(),
-            adv_open: false,
         }
     }
 }
@@ -240,15 +225,12 @@ pub struct LogEntry {
     pub phase: String,
     pub message: String,
     pub level: LogLevel,
-    #[allow(dead_code)]
-    pub percent: Option<f32>,
     pub timestamp: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogLevel {
     Info,
-    #[allow(dead_code)]
     Warn,
     Error,
 }
@@ -276,7 +258,7 @@ impl StatusMsg {
     }
 }
 
-// ── Inspection result (mirrors engine IsoMetadata) ─────────────────────────────
+// ── Engine type aliases ────────────────────────────────────────────────────────
 
 pub type BuildResult = forgeiso_engine::BuildResult;
 pub type DoctorReport = forgeiso_engine::DoctorReport;
