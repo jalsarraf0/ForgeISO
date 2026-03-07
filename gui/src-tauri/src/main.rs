@@ -356,6 +356,10 @@ async fn start_event_stream(
                 "phase": format!("{:?}", event.phase),
                 "level": format!("{:?}", event.level),
                 "message": event.message,
+                "substage": event.substage,
+                "percent": event.percent,
+                "bytesDone": event.bytes_done,
+                "bytesTotal": event.bytes_total,
             });
             let _ = app.emit("forgeiso-log", payload);
         }

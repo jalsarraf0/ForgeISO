@@ -1,0 +1,144 @@
+// ── Distro capability model ───────────────────────────────────────────────────
+// This is the authoritative definition of what ForgeISO supports per distro.
+// Add support for a new distro by adding a DistroFamily entry and capability set.
+// The UI reads this at runtime — no UI code changes needed for new distros.
+
+export type SupportLevel = 'supported' | 'beta' | 'coming_soon' | 'not_applicable';
+
+export type DistroCapabilities = {
+  build: SupportLevel;
+  inject: SupportLevel;
+  verify: SupportLevel;
+  diff: SupportLevel;
+  scan: SupportLevel;
+  test: SupportLevel;
+};
+
+export type DistroRelease = {
+  version: string;
+  label: string;
+  lts?: boolean;
+  recommended?: boolean;
+};
+
+export type DistroFamily = {
+  id: string;
+  label: string;
+  description: string;
+  iconChar: string;           // emoji/char to use when no SVG icon is available
+  accentColor: string;        // CSS color string for branding accents
+  capabilities: DistroCapabilities;
+  releases: DistroRelease[];
+  injectMethod: string;       // human-readable injection method description
+  injectNotes?: string;       // any caveats or limitations
+};
+
+export const DISTRO_FAMILIES: DistroFamily[] = [
+  {
+    id: 'ubuntu',
+    label: 'Ubuntu',
+    description: 'Canonical Ubuntu — full cloud-init autoinstall support.',
+    iconChar: '🟠',
+    accentColor: '#e95420',
+    capabilities: {
+      build: 'supported',
+      inject: 'supported',
+      verify: 'supported',
+      diff: 'supported',
+      scan: 'supported',
+      test: 'supported',
+    },
+    releases: [
+      { version: '24.04', label: '24.04 LTS (Noble)', lts: true, recommended: true },
+      { version: '22.04', label: '22.04 LTS (Jammy)', lts: true },
+      { version: '23.10', label: '23.10 (Mantic)' },
+    ],
+    injectMethod: 'Cloud-init autoinstall (nocloud ds)',
+    injectNotes: 'Generates a full Ubuntu autoinstall user-data YAML and embeds it into the ISO boot path. 60+ configuration flags are supported.',
+  },
+  {
+    id: 'mint',
+    label: 'Linux Mint',
+    description: 'Linux Mint — preseed injection (beta).',
+    iconChar: '🟢',
+    accentColor: '#86b840',
+    capabilities: {
+      build: 'supported',
+      inject: 'beta',
+      verify: 'coming_soon',
+      diff: 'supported',
+      scan: 'supported',
+      test: 'coming_soon',
+    },
+    releases: [
+      { version: '21.3', label: '21.3 (Virginia)', recommended: true },
+      { version: '21.2', label: '21.2 (Victoria)' },
+    ],
+    injectMethod: 'Debian preseed (beta)',
+    injectNotes: 'Linux Mint uses a Debian-style preseed for unattended installation. Full preseed generation is in active development. Basic field mapping is available.',
+  },
+  {
+    id: 'fedora',
+    label: 'Fedora / RHEL',
+    description: 'Fedora and RHEL family — Kickstart injection (coming soon).',
+    iconChar: '🔵',
+    accentColor: '#3c6eb4',
+    capabilities: {
+      build: 'coming_soon',
+      inject: 'coming_soon',
+      verify: 'coming_soon',
+      diff: 'coming_soon',
+      scan: 'coming_soon',
+      test: 'coming_soon',
+    },
+    releases: [
+      { version: '40', label: 'Fedora 40', recommended: true },
+      { version: '39', label: 'Fedora 39' },
+      { version: '9', label: 'RHEL / AlmaLinux / Rocky 9' },
+    ],
+    injectMethod: 'Kickstart (ks.cfg) — coming soon',
+    injectNotes: 'Fedora and RHEL family ISOs use Kickstart for unattended installation. The engine architecture is designed for this — implementation is on the roadmap.',
+  },
+  {
+    id: 'arch',
+    label: 'Arch Linux',
+    description: 'Arch Linux — archinstall script injection (coming soon).',
+    iconChar: '🔷',
+    accentColor: '#1793d1',
+    capabilities: {
+      build: 'coming_soon',
+      inject: 'coming_soon',
+      verify: 'coming_soon',
+      diff: 'coming_soon',
+      scan: 'coming_soon',
+      test: 'coming_soon',
+    },
+    releases: [
+      { version: 'rolling', label: 'Rolling Release', recommended: true },
+    ],
+    injectMethod: 'archinstall script — coming soon',
+    injectNotes: 'Arch Linux uses the archinstall Python tool for guided installation. ISO injection of archinstall configurations is on the roadmap.',
+  },
+];
+
+export function getDistro(id: string): DistroFamily {
+  return DISTRO_FAMILIES.find((d) => d.id === id) ?? DISTRO_FAMILIES[0];
+}
+
+export function capabilityLabel(level: SupportLevel): string {
+  switch (level) {
+    case 'supported':     return 'Supported';
+    case 'beta':          return 'Beta';
+    case 'coming_soon':   return 'Coming Soon';
+    case 'not_applicable': return 'N/A';
+  }
+}
+
+export function capabilityClass(level: SupportLevel): string {
+  switch (level) {
+    case 'supported':     return 'cap-supported';
+    case 'beta':          return 'cap-beta';
+    case 'coming_soon':   return 'cap-soon';
+    case 'not_applicable': return 'cap-na';
+  }
+}
