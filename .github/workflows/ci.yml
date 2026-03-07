@@ -122,7 +122,8 @@ jobs:
             rpm \
             squashfs-tools \
             mtools \
-            xorriso
+            xorriso \
+            libarchive-tools
           sudo gem install fpm --no-document
           # Install syft for SBOM generation in release artifacts
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
