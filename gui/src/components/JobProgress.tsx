@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { JobProgress } from '../types';
 
+const BAR_SLOTS = 32;
+
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -15,6 +17,64 @@ function fmtElapsed(startedAt: Date): string {
   return `${m}m ${s % 60}s`;
 }
 
+// Renders a pipe-style progress bar:  |████████████░░░░░░░░|  55%
+function PipeBar({ percent, bytesDone, bytesTotal }: {
+  percent: number | null;
+  bytesDone: number | null;
+  bytesTotal: number | null;
+}) {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (percent !== null) return;
+    const id = setInterval(() => setFrame((f) => (f + 1) % BAR_SLOTS), 120);
+    return () => clearInterval(id);
+  }, [percent]);
+
+  const hasPct = percent !== null && percent !== undefined;
+  const hasBytes = bytesDone !== null && bytesTotal !== null &&
+    bytesDone !== undefined && bytesTotal !== undefined && bytesTotal > 0;
+
+  if (hasPct) {
+    const filled = Math.round((percent! / 100) * BAR_SLOTS);
+    const empty  = BAR_SLOTS - filled;
+    const pctStr = `${Math.round(percent!)}%`.padStart(4, ' ');
+    return (
+      <div className="pipe-bar">
+        <span className="pipe-bracket">|</span>
+        <span className="pipe-filled">{'█'.repeat(filled)}</span>
+        <span className="pipe-empty">{'░'.repeat(empty)}</span>
+        <span className="pipe-bracket">|</span>
+        <span className="pipe-pct">{pctStr}</span>
+        {hasBytes && (
+          <span className="pipe-bytes">
+            {fmtBytes(bytesDone!)} / {fmtBytes(bytesTotal!)}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Indeterminate — sliding block animation using frame counter
+  const inner = Array.from({ length: BAR_SLOTS }, (_, i) => {
+    const dist = Math.min(
+      Math.abs(i - frame),
+      Math.abs(i - frame + BAR_SLOTS),
+      Math.abs(i - frame - BAR_SLOTS),
+    );
+    return dist <= 3 ? '▓' : '░';
+  }).join('');
+
+  return (
+    <div className="pipe-bar">
+      <span className="pipe-bracket">|</span>
+      <span className="pipe-indeterminate">{inner}</span>
+      <span className="pipe-bracket">|</span>
+      <span className="pipe-pct pipe-pct-working">···</span>
+    </div>
+  );
+}
+
 export function JobProgressCard({ progress }: { progress: JobProgress }) {
   const [, tick] = useState(0);
 
@@ -25,12 +85,6 @@ export function JobProgressCard({ progress }: { progress: JobProgress }) {
   }, [progress.status]);
 
   const isRunning = progress.status === 'running';
-  const hasPercent = progress.percent !== null && progress.percent !== undefined;
-  const hasByteProg =
-    progress.bytesDone !== null &&
-    progress.bytesTotal !== null &&
-    progress.bytesTotal !== undefined &&
-    progress.bytesDone !== undefined;
 
   return (
     <div className="progress-card">
@@ -51,25 +105,11 @@ export function JobProgressCard({ progress }: { progress: JobProgress }) {
         </div>
       )}
 
-      <div className="progress-bar-track">
-        {hasPercent ? (
-          <div
-            className="progress-bar-fill"
-            style={{ width: `${progress.percent}%` }}
-          />
-        ) : (
-          <div className="progress-bar-fill progress-bar-indeterminate" />
-        )}
-      </div>
-
-      <div className="progress-meta">
-        <span>{hasPercent ? `${Math.round(progress.percent!)}%` : 'Working…'}</span>
-        {hasByteProg && (
-          <span className="progress-bytes">
-            {fmtBytes(progress.bytesDone!)} / {fmtBytes(progress.bytesTotal!)}
-          </span>
-        )}
-      </div>
+      <PipeBar
+        percent={progress.percent ?? null}
+        bytesDone={progress.bytesDone ?? null}
+        bytesTotal={progress.bytesTotal ?? null}
+      />
     </div>
   );
 }

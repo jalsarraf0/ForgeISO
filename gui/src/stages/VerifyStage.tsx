@@ -5,6 +5,7 @@ import type { Iso9660Compliance, JobProgress, VerifyResult } from '../types';
 import type { AppAction } from '../store';
 import { Field, TextInput } from '../components/forms';
 import { JobProgressCard } from '../components/JobProgress';
+import { useStageAutoAdvance } from '../hooks';
 
 function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -91,6 +92,11 @@ export function VerifyStage({
   };
 
   const canProceed = verifyResult?.matched && iso9660Result?.compliant;
+  const bothDone = verifyResult !== null && iso9660Result !== null;
+  const { remaining: verifyRemaining, ref: verifyResultRef, skip: verifySkip } = useStageAutoAdvance(
+    bothDone,
+    () => dispatch({ type: 'ADVANCE_STAGE', from: 'verify' }),
+  );
 
   return (
     <div className="main-content">
@@ -99,7 +105,7 @@ export function VerifyStage({
 
       {/* Stage guidance */}
       <div className="stage-guidance">
-        <span className="stage-guidance-step">Step 3</span>
+        <span className="stage-guidance-step">Step 2</span>
         Verify the ISO checksum against official sources and confirm the image is a
         valid ISO-9660 filesystem. Both checks must pass before the image is safe to deploy.
       </div>
@@ -251,21 +257,27 @@ export function VerifyStage({
 
       {/* Continue */}
       {(verifyResult || iso9660Result) && (
-        <div className="btn-group btn-group-right">
+        <div className="card card-green" ref={verifyResultRef}>
+          <div className="card-header">
+            <h2>{canProceed ? '✓ Verification Passed' : '⚠ Verification Complete'}</h2>
+          </div>
           {!canProceed && (
-            <p className="status-line warn" style={{ marginRight: 'auto' }}>
-              {!verifyResult?.matched && 'Checksum has not passed. '}
-              {!iso9660Result?.compliant && iso9660Result && 'ISO-9660 check failed. '}
+            <p className="status-line warn" style={{ marginBottom: 'var(--sp-3)' }}>
+              {verifyResult && !verifyResult.matched && 'Checksum has not passed. '}
+              {iso9660Result && !iso9660Result.compliant && 'ISO-9660 check failed. '}
               You can still continue but deployment risk is elevated.
             </p>
           )}
-          <button
-            className="btn btn-primary"
-            type="button"
-            onClick={() => dispatch({ type: 'ADVANCE_STAGE', from: 'verify' })}
-          >
-            Continue to Diff →
-          </button>
+          <div className="wizard-advance-row">
+            {verifyRemaining !== null && (
+              <span className="wizard-countdown">
+                Continuing to Diff in {verifyRemaining}s…
+              </span>
+            )}
+            <button className="btn btn-primary btn-lg" type="button" onClick={verifySkip}>
+              Continue to Diff →
+            </button>
+          </div>
         </div>
       )}
     </div>

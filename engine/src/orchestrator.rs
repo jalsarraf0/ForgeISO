@@ -747,6 +747,8 @@ impl ForgeIsoEngine {
         let output = run_command_lossy(
             "xorriso",
             &[
+                "-osirrox".to_string(),
+                "on".to_string(),
                 "-indev".to_string(),
                 resolved.source_path.to_string_lossy().to_string(),
                 "-extract".to_string(),
@@ -766,6 +768,10 @@ impl ForgeIsoEngine {
             EventPhase::Inject,
             "extracted ISO filesystem",
         ));
+
+        // xorriso extracts files with read-only permissions; make writable
+        // so we can modify the tree and inject files without permission errors.
+        chmod_recursive_writable(&extract_dir);
 
         // Copy distro-specific files into the extracted ISO and patch boot entries
         match cfg.distro {
@@ -1067,7 +1073,11 @@ pub fn default_cache_root() -> EngineResult<PathBuf> {
         return Ok(path);
     }
 
-    let path = PathBuf::from("/tmp/forgeoutput");
+    // XDG-compliant default: ~/.cache/forgeiso — avoids tmpfs quota issues
+    let base = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"));
+    let path = base.join(".cache").join("forgeiso");
     std::fs::create_dir_all(&path)?;
     Ok(path)
 }

@@ -6,6 +6,7 @@ import type { AppAction } from '../store';
 import { DISTRO_FAMILIES, capabilityClass, capabilityLabel } from '../distro';
 import { Field, TextInput } from '../components/forms';
 import { JobProgressCard } from '../components/JobProgress';
+import { useStageAutoAdvance } from '../hooks';
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
@@ -51,7 +52,16 @@ export function BuildStage({
   const [statusMsg, setStatusMsg] = useState('');
   const [statusKind, setStatusKind] = useState<'ok' | 'err' | ''>('');
 
-  const canBuild = useMemo(() => source.trim().length > 0 && outputDir.trim().length > 0, [source, outputDir]);
+  const distroData = DISTRO_FAMILIES.find((d) => d.id === selectedDistro) ?? DISTRO_FAMILIES[0];
+  const canBuild = useMemo(
+    () => source.trim().length > 0 && outputDir.trim().length > 0,
+    [source, outputDir],
+  );
+
+  const { remaining: buildRemaining, ref: buildResultRef, skip: buildSkip } = useStageAutoAdvance(
+    buildResult !== null,
+    () => dispatch({ type: 'ADVANCE_STAGE', from: 'build' }),
+  );
 
   const setStatus = (msg: string, kind: 'ok' | 'err' | '' = '') => {
     setStatusMsg(msg);
@@ -64,8 +74,14 @@ export function BuildStage({
     try {
       const result = await invoke<Inspection>('inspect_source', { source });
       setInspection(result);
+      // Lock in the local cached path so subsequent operations don't re-download
+      if (result.source_path && result.source_path !== source) {
+        setSource(result.source_path);
+        setStatus(`Inspection complete — cached at ${result.source_path}`, 'ok');
+      } else {
+        setStatus('Inspection complete', 'ok');
+      }
       dispatch({ type: 'JOB_SUCCESS', stage: 'build' });
-      setStatus('Inspection complete', 'ok');
     } catch (e) {
       dispatch({ type: 'JOB_ERROR', stage: 'build', error: String(e) });
       setStatus(`Inspect failed: ${e}`, 'err');
@@ -136,7 +152,6 @@ export function BuildStage({
     }
   };
 
-  const distro = DISTRO_FAMILIES.find((d) => d.id === selectedDistro) ?? DISTRO_FAMILIES[0];
   const hasArtifact = (buildResult?.artifacts.length ?? 0) > 0;
 
   return (
@@ -148,9 +163,9 @@ export function BuildStage({
 
       {/* Stage guidance */}
       <div className="stage-guidance">
-        <span className="stage-guidance-step">Step 1</span>
-        Select a Linux distribution and source ISO. Optionally inspect the image before building,
-        then click <strong>Build ISO</strong> to package it.
+        <span className="stage-guidance-step">Step 4</span>
+        Optionally build a custom ISO from scratch — fetch a base image, apply an overlay,
+        and repackage. Click <strong>Build ISO</strong> to produce a new artifact.
       </div>
 
       {/* Distro selector */}
@@ -163,16 +178,16 @@ export function BuildStage({
         </div>
         <div className="distro-grid">
           {DISTRO_FAMILIES.map((d) => {
-            const isSupported = d.capabilities.build === 'supported' || d.capabilities.build === 'beta';
+            const distroBuilable = d.capabilities.build === 'supported' || d.capabilities.build === 'beta';
             return (
               <div
                 key={d.id}
                 className={[
                   'distro-card',
                   d.id === selectedDistro ? 'selected' : '',
-                  !isSupported ? 'disabled' : '',
                 ].filter(Boolean).join(' ')}
-                onClick={() => { if (isSupported) { setSelectedDistro(d.id); dispatch({ type: 'SET_DISTRO', distro: d.id }); } }}
+                onClick={() => { setSelectedDistro(d.id); dispatch({ type: 'SET_DISTRO', distro: d.id }); }}
+                style={!distroBuilable ? { opacity: 0.7 } : undefined}
               >
                 <div className="distro-icon">{d.iconChar}</div>
                 <div className="distro-name">{d.label}</div>
@@ -192,7 +207,7 @@ export function BuildStage({
             </tr>
           </thead>
           <tbody>
-            {(Object.entries(distro.capabilities) as [string, import('../distro').SupportLevel][]).map(([op, level]) => (
+            {(Object.entries(distroData.capabilities) as [string, import('../distro').SupportLevel][]).map(([op, level]) => (
               <tr key={op}>
                 <td style={{ color: 'var(--text-secondary)' }}>{op.charAt(0).toUpperCase() + op.slice(1)}</td>
                 <td>
@@ -201,7 +216,7 @@ export function BuildStage({
                   </span>
                 </td>
                 <td style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-                  {op === 'inject' ? distro.injectMethod : '—'}
+                  {op === 'inject' ? distroData.injectMethod : '—'}
                 </td>
               </tr>
             ))}
@@ -343,9 +358,9 @@ export function BuildStage({
 
       {/* Build result */}
       {buildResult && (
-        <div className="card card-green">
+        <div className="card card-green" ref={buildResultRef}>
           <div className="card-header">
-            <h2>Build Complete</h2>
+            <h2>✓ Build Complete</h2>
           </div>
           <div className="artifact-list">
             {buildResult.artifacts.map((a) => (
@@ -355,13 +370,18 @@ export function BuildStage({
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 'var(--sp-4)' }} className="btn-group btn-group-right">
+          <div className="wizard-advance-row" style={{ marginTop: 'var(--sp-4)' }}>
+            {buildRemaining !== null && (
+              <span className="wizard-countdown">
+                Continuing to Completion in {buildRemaining}s…
+              </span>
+            )}
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-lg"
               type="button"
-              onClick={() => dispatch({ type: 'ADVANCE_STAGE', from: 'build' })}
+              onClick={buildSkip}
             >
-              Continue to Inject →
+              Continue to Completion →
             </button>
           </div>
         </div>

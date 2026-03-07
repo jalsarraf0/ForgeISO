@@ -16,12 +16,12 @@ import type {
 // ── Initial state ─────────────────────────────────────────────────────────────
 
 export const initialState: AppState = {
-  activeStage: 'build',
+  activeStage: 'inject',
   stageStatus: {
-    build:      'active',
-    inject:     'pending',
+    inject:     'active',
     verify:     'pending',
     diff:       'pending',
+    build:      'pending',
     completion: 'pending',
   },
   isRunning: false,
@@ -62,7 +62,7 @@ export type AppAction =
 
 // ── Stage ordering ────────────────────────────────────────────────────────────
 
-const STAGE_ORDER: AppStage[] = ['build', 'inject', 'verify', 'diff', 'completion'];
+const STAGE_ORDER: AppStage[] = ['inject', 'verify', 'diff', 'build', 'completion'];
 
 function nextStage(current: AppStage): AppStage | null {
   const idx = STAGE_ORDER.indexOf(current);

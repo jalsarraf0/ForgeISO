@@ -121,6 +121,9 @@ struct InjectRequest {
 
     // Target distro: "ubuntu" (default), "fedora", "arch"
     distro: Option<String>,
+
+    // Branding
+    wallpaper_path: Option<String>,
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -273,7 +276,7 @@ async fn inject_iso(
         storage_layout: opt_str(request.storage_layout),
         apt_mirror: opt_str(request.apt_mirror),
         extra_packages: request.packages,
-        wallpaper: None,
+        wallpaper: opt_str(request.wallpaper_path).map(PathBuf::from),
         extra_late_commands: request.extra_late_commands,
         no_user_interaction: request.no_user_interaction,
         user: UserConfig {

@@ -6,6 +6,7 @@ import type { AppAction } from '../store';
 import { defaultInjectState, INJECT_PRESETS } from '../types';
 import { Field, TextInput, TextArea, Toggle, Accordion, useAccordion } from '../components/forms';
 import { JobProgressCard } from '../components/JobProgress';
+import { useStageAutoAdvance } from '../hooks';
 
 // ── Local form reducer ────────────────────────────────────────────────────────
 
@@ -64,10 +65,16 @@ export function InjectStage({
   const pkgLabel    = isFedora ? 'Packages & DNF Repos' : isArch ? 'Packages (pacman)' : 'Packages & APT Repos';
   const mirrorLabel = isFedora ? 'DNF mirror URL (baseurl)' : isArch ? 'Pacman mirror URL' : 'APT mirror URL';
   const repoLabel   = isFedora ? 'DNF repos (.repo content, one per line)' : isArch ? 'N/A for Arch (use Pacman mirror above)' : 'APT repos (PPA or deb line, one per line)';
-  const firewallTitle = isFedora ? 'Firewall (firewalld)' : isArch ? 'Firewall (iptables/nftables)' : 'Firewall (UFW)';
+  const firewallTitle  = isFedora ? 'Firewall (firewalld)' : isArch ? 'Firewall (iptables/nftables)' : 'Firewall (UFW)';
+  const firewallToggle = isFedora ? 'Enable firewalld' : isArch ? 'Enable iptables/nftables firewall' : 'Enable UFW firewall';
 
   const [statusMsg, setStatusMsg] = useState('');
   const [statusKind, setStatusKind] = useState<'ok' | 'err' | ''>('');
+
+  const { remaining: injectRemaining, ref: injectResultRef, skip: injectSkip } = useStageAutoAdvance(
+    injectResult !== null,
+    () => dispatch({ type: 'ADVANCE_STAGE', from: 'inject' }),
+  );
 
   const setStatus = (msg: string, kind: 'ok' | 'err' | '' = '') => {
     setStatusMsg(msg);
@@ -143,6 +150,7 @@ export function InjectStage({
           extraLateCommands: lines(inj.extraLateCommands),
           noUserInteraction: inj.noUserInteraction,
           distro: inj.distro === 'ubuntu' ? null : inj.distro,
+          wallpaperPath: optStr(inj.wallpaperPath),
         },
       });
       const iso = result.artifacts[0] ?? result.output_dir;
@@ -162,7 +170,7 @@ export function InjectStage({
 
       {/* Stage guidance */}
       <div className="stage-guidance">
-        <span className="stage-guidance-step">Step 2</span>
+        <span className="stage-guidance-step">Step 1</span>
         Configure the unattended installation settings and inject them into the ISO.
         Start with a preset template, then refine individual sections below.
       </div>
@@ -215,8 +223,9 @@ export function InjectStage({
               className="text-input"
             >
               <option value="ubuntu">Ubuntu (cloud-init autoinstall)</option>
-              <option value="fedora">Fedora / RHEL (Kickstart ks.cfg) — Beta</option>
-              <option value="arch">Arch Linux (archinstall JSON) — Beta</option>
+              <option value="mint">Linux Mint (cloud-init, Ubuntu-compatible)</option>
+              <option value="fedora">Fedora / RHEL (Kickstart ks.cfg)</option>
+              <option value="arch">Arch Linux (archinstall JSON)</option>
             </select>
           </Field>
           <Field label="Existing autoinstall YAML (merge mode, Ubuntu only)">
@@ -294,6 +303,23 @@ export function InjectStage({
         </div>
       </Accordion>
 
+      <Accordion id="wallpaper" icon="🖼️" title="Wallpaper" summary="Custom desktop wallpaper" open={is('wallpaper')} onToggle={toggle}>
+        <div className="field-grid">
+          <Field label="Wallpaper image path (PNG or JPG — injected into ISO)" className="span-2">
+            <TextInput
+              value={inj.wallpaperPath}
+              onChange={set('wallpaperPath')}
+              placeholder="/path/to/wallpaper.png"
+              disabled={isRunning}
+            />
+          </Field>
+        </div>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 'var(--sp-2)' }}>
+          The image is copied into the ISO and set as the GNOME desktop background on first boot.
+          Leave blank to keep the distro default.
+        </p>
+      </Accordion>
+
       <Accordion id="storage" icon="💾" title="Storage & APT" summary="Layout, mirror, encryption" open={is('storage')} onToggle={toggle}>
         <div className="field-grid">
           <Field label="Storage layout">
@@ -338,7 +364,7 @@ export function InjectStage({
       <Accordion id="firewall" icon="🛡️" title={firewallTitle} summary="Firewall rules, ports" open={is('firewall')} onToggle={toggle}>
         <div className="field-grid">
           <div className="span-2">
-            <Toggle label="Enable UFW firewall" checked={inj.firewallEnabled} onChange={set('firewallEnabled')} disabled={isRunning} />
+            <Toggle label={firewallToggle} checked={inj.firewallEnabled} onChange={set('firewallEnabled')} disabled={isRunning} />
           </div>
           <Field label="Default incoming policy">
             <select value={inj.firewallPolicy} onChange={(e) => set('firewallPolicy')(e.target.value)} disabled={isRunning || !inj.firewallEnabled}>
@@ -468,9 +494,9 @@ export function InjectStage({
 
       {/* Result */}
       {injectResult && (
-        <div className="card card-green" style={{ marginTop: 'var(--sp-4)' }}>
+        <div className="card card-green" style={{ marginTop: 'var(--sp-4)' }} ref={injectResultRef}>
           <div className="card-header">
-            <h2>Inject Complete</h2>
+            <h2>✓ Inject Complete</h2>
           </div>
           <div className="artifact-list">
             {injectResult.artifacts.map((a) => (
@@ -480,12 +506,13 @@ export function InjectStage({
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 'var(--sp-4)' }} className="btn-group btn-group-right">
-            <button
-              className="btn btn-primary"
-              type="button"
-              onClick={() => dispatch({ type: 'ADVANCE_STAGE', from: 'inject' })}
-            >
+          <div className="wizard-advance-row" style={{ marginTop: 'var(--sp-4)' }}>
+            {injectRemaining !== null && (
+              <span className="wizard-countdown">
+                Continuing to Verify in {injectRemaining}s…
+              </span>
+            )}
+            <button className="btn btn-primary btn-lg" type="button" onClick={injectSkip}>
               Continue to Verify →
             </button>
           </div>
