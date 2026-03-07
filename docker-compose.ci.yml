@@ -2,8 +2,8 @@
 #
 # Each service gets its own named volumes for Cargo target and cargo home so
 # that compilation in one container NEVER blocks another (no artifact locks).
-#
-# Source workspace is mounted read-only: containers cannot modify source files.
+# CARGO_TARGET_DIR and CARGO_HOME are redirected to isolated named volumes;
+# the source workspace is writable only for Cargo's own scratch files.
 #
 # Usage:
 #   docker compose -f docker-compose.ci.yml build --parallel   # build all images
@@ -19,7 +19,7 @@ services:
       dockerfile: containers/C1.rust.Dockerfile
     command: ["bash", "-c", "scripts/ci/c1-rust.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
       - c1-cargo-target:/ci-target
       - c1-cargo-home:/ci-cargo
     environment:
@@ -33,7 +33,7 @@ services:
       dockerfile: containers/C2.sbom.Dockerfile
     command: ["bash", "-c", "scripts/ci/c2-sbom.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
       - c2-cargo-target:/ci-target
       - c2-cargo-home:/ci-cargo
     environment:
@@ -47,7 +47,7 @@ services:
       dockerfile: containers/C3.gui.Dockerfile
     command: ["bash", "-c", "scripts/ci/c3-gui.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
       - c3-cargo-target:/ci-target
       - c3-cargo-home:/ci-cargo
       - c3-node-modules:/workspace/gui/node_modules
@@ -62,7 +62,7 @@ services:
       dockerfile: containers/C4.security.Dockerfile
     command: ["bash", "-c", "scripts/ci/c4-security.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
     environment:
       - CI=true
 
@@ -72,7 +72,7 @@ services:
       dockerfile: containers/C5.integration.Dockerfile
     command: ["bash", "-c", "scripts/ci/c5-integration.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
       - c5-cargo-target:/ci-target
       - c5-cargo-home:/ci-cargo
     environment:
@@ -86,7 +86,7 @@ services:
       dockerfile: containers/C6.e2e.Dockerfile
     command: ["bash", "-c", "scripts/ci/c6-e2e.sh"]
     volumes:
-      - .:/workspace:ro
+      - .:/workspace
       - c6-cargo-target:/ci-target
       - c6-cargo-home:/ci-cargo
     environment:
