@@ -3,6 +3,217 @@ use sha_crypt::{sha512_simple, Sha512Params};
 use crate::config::InjectConfig;
 use crate::error::{EngineError, EngineResult};
 
+/// Build all feature-specific late-commands in canonical order
+fn build_feature_late_commands(cfg: &InjectConfig) -> EngineResult<Vec<String>> {
+    let mut cmds = Vec::new();
+
+    // 1. NTP servers
+    if !cfg.network.ntp_servers.is_empty() {
+        let ntp_list = cfg.network.ntp_servers.join(" ");
+        cmds.push(format!(
+            "printf '[Time]\\nNTP={ntp_list}\\n' > /target/etc/systemd/timesyncd.conf"
+        ));
+        cmds.push("chroot /target systemctl enable systemd-timesyncd".to_string());
+    }
+
+    // 2. Wallpaper
+    if let Some(wallpaper_path) = &cfg.wallpaper {
+        if let Some(filename) = wallpaper_path.file_name() {
+            if let Some(filename_str) = filename.to_str() {
+                let ext = wallpaper_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("jpg");
+                cmds.push(format!(
+                    "cp /cdrom/wallpaper/{} /target/usr/share/backgrounds/forgeiso-wallpaper.{}",
+                    filename_str, ext
+                ));
+                cmds.push("mkdir -p /target/etc/dconf/db/local.d".to_string());
+                cmds.push(
+                    "printf '[org/gnome/desktop/background]\\npicture-uri=\"file:///usr/share/backgrounds/forgeiso-wallpaper.{}\\\"\\n' > /target/etc/dconf/db/local.d/00-forgeiso-background".to_string()
+                );
+                cmds.push("chroot /target dconf update".to_string());
+            }
+        }
+    }
+
+    // 3. User groups, shell, sudo
+    if !cfg.user.groups.is_empty() {
+        let groups = cfg.user.groups.join(",");
+        let uname = cfg.username.as_deref().unwrap_or("ubuntu");
+        cmds.push(format!("chroot /target usermod -aG {groups} {uname}"));
+    }
+    if let Some(shell) = &cfg.user.shell {
+        let uname = cfg.username.as_deref().unwrap_or("ubuntu");
+        cmds.push(format!("chroot /target chsh -s {shell} {uname}"));
+    }
+    if cfg.user.sudo_nopasswd {
+        let uname = cfg.username.as_deref().unwrap_or("ubuntu");
+        cmds.push(format!(
+            "echo '{uname} ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/nopasswd-{uname}"
+        ));
+        cmds.push(format!("chmod 440 /target/etc/sudoers.d/nopasswd-{uname}"));
+    } else if !cfg.user.sudo_commands.is_empty() {
+        let uname = cfg.username.as_deref().unwrap_or("ubuntu");
+        let cmds_str = cfg.user.sudo_commands.join(", ");
+        cmds.push(format!(
+            "echo '{uname} ALL=(ALL) NOPASSWD: {cmds_str}' > /target/etc/sudoers.d/cmds-{uname}"
+        ));
+        cmds.push(format!("chmod 440 /target/etc/sudoers.d/cmds-{uname}"));
+    }
+
+    // 4. Proxy
+    if cfg.proxy.http_proxy.is_some() || cfg.proxy.https_proxy.is_some() {
+        if let Some(hp) = &cfg.proxy.http_proxy {
+            cmds.push(format!(
+                "echo 'http_proxy=\"{hp}\"' >> /target/etc/environment"
+            ));
+            cmds.push(format!(
+                "printf 'Acquire::http::Proxy \"{hp}\";\n' > /target/etc/apt/apt.conf.d/99proxy"
+            ));
+        }
+        if let Some(sp) = &cfg.proxy.https_proxy {
+            cmds.push(format!(
+                "echo 'https_proxy=\"{sp}\"' >> /target/etc/environment"
+            ));
+            cmds.push(format!(
+                "printf 'Acquire::https::Proxy \"{sp}\";\n' >> /target/etc/apt/apt.conf.d/99proxy"
+            ));
+        }
+        if !cfg.proxy.no_proxy.is_empty() {
+            let np = cfg.proxy.no_proxy.join(",");
+            cmds.push(format!(
+                "echo 'no_proxy=\"{np}\"' >> /target/etc/environment"
+            ));
+        }
+    }
+
+    // 5. Enable/disable services
+    for svc in &cfg.enable_services {
+        cmds.push(format!("chroot /target systemctl enable {svc}"));
+    }
+    for svc in &cfg.disable_services {
+        cmds.push(format!("chroot /target systemctl disable {svc}"));
+    }
+
+    // 6. sysctl
+    if !cfg.sysctl.is_empty() {
+        for (key, val) in &cfg.sysctl {
+            cmds.push(format!(
+                "echo '{key}={val}' >> /target/etc/sysctl.d/99-forgeiso.conf"
+            ));
+        }
+        cmds.push("chroot /target sysctl -p /etc/sysctl.d/99-forgeiso.conf".to_string());
+    }
+
+    // 7. Swap
+    if let Some(swap) = &cfg.swap {
+        let fname = swap.filename.as_deref().unwrap_or("/swapfile");
+        let mb = swap.size_mb;
+        cmds.push(format!("fallocate -l {mb}M /target{fname}"));
+        cmds.push(format!("chmod 600 /target{fname}"));
+        cmds.push(format!("chroot /target mkswap {fname}"));
+        cmds.push(format!(
+            "echo '{fname} none swap defaults 0 0' >> /target/etc/fstab"
+        ));
+        if let Some(swappiness) = swap.swappiness {
+            cmds.push(format!(
+                "echo 'vm.swappiness={swappiness}' >> /target/etc/sysctl.d/99-swap.conf"
+            ));
+        }
+    }
+
+    // 8. Firewall (UFW)
+    if cfg.firewall.enabled {
+        if let Some(policy) = &cfg.firewall.default_policy {
+            cmds.push(format!("chroot /target ufw default {policy} incoming"));
+        }
+        for port in &cfg.firewall.allow_ports {
+            cmds.push(format!("chroot /target ufw allow {port}"));
+        }
+        for port in &cfg.firewall.deny_ports {
+            cmds.push(format!("chroot /target ufw deny {port}"));
+        }
+        cmds.push("chroot /target ufw --force enable".to_string());
+        cmds.push("chroot /target systemctl enable ufw".to_string());
+    }
+
+    // 9. APT repos
+    for repo in &cfg.apt_repos {
+        if repo.starts_with("ppa:") {
+            cmds.push(format!("chroot /target add-apt-repository -y '{repo}'"));
+        } else {
+            cmds.push(format!(
+                "echo '{repo}' >> /target/etc/apt/sources.list.d/forgeiso-extra.list"
+            ));
+        }
+    }
+    if !cfg.apt_repos.is_empty() {
+        cmds.push("chroot /target apt-get update".to_string());
+    }
+
+    // 10. Docker
+    if cfg.containers.docker {
+        cmds.push("install -m 0755 -d /target/etc/apt/keyrings".to_string());
+        cmds.push(
+            "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /target/etc/apt/keyrings/docker.gpg".to_string()
+        );
+        cmds.push("chmod a+r /target/etc/apt/keyrings/docker.gpg".to_string());
+        cmds.push(
+            r#"echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | chroot /target tee /etc/apt/sources.list.d/docker.list"#.to_string()
+        );
+        cmds.push("chroot /target apt-get update".to_string());
+        cmds.push(
+            "chroot /target apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin".to_string()
+        );
+        cmds.push("chroot /target systemctl enable docker".to_string());
+        for user in &cfg.containers.docker_users {
+            cmds.push(format!("chroot /target usermod -aG docker {user}"));
+        }
+    }
+
+    // 11. GRUB
+    let grub_changed = cfg.grub.timeout.is_some()
+        || !cfg.grub.cmdline_extra.is_empty()
+        || cfg.grub.default_entry.is_some();
+    if grub_changed {
+        if let Some(t) = cfg.grub.timeout {
+            cmds.push(format!(
+                r#"sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT={t}/' /target/etc/default/grub"#
+            ));
+        }
+        if let Some(entry) = &cfg.grub.default_entry {
+            cmds.push(format!(
+                r#"sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT={entry}/' /target/etc/default/grub"#
+            ));
+        }
+        for param in &cfg.grub.cmdline_extra {
+            cmds.push(format!(
+                r#"sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT=".*\)"/\1 {param}"/' /target/etc/default/grub"#
+            ));
+        }
+        cmds.push("chroot /target update-grub".to_string());
+    }
+
+    // 12. Custom mounts (fstab entries)
+    for entry in &cfg.mounts {
+        let parts: Vec<&str> = entry.splitn(2, ' ').collect();
+        if parts.len() >= 2 {
+            let mountpoint = parts[1].split_whitespace().next().unwrap_or("/mnt");
+            cmds.push(format!("mkdir -p /target{mountpoint}"));
+        }
+        cmds.push(format!("echo '{entry}' >> /target/etc/fstab"));
+    }
+
+    // 13. Run commands
+    cmds.extend(cfg.run_commands.iter().cloned());
+
+    // 14. Extra late commands
+    cmds.extend(cfg.extra_late_commands.clone());
+
+    Ok(cmds)
+}
+
 /// Hash a plaintext password to SHA512-crypt format ($6$...)
 pub fn hash_password(plaintext: &str) -> EngineResult<String> {
     let params = Sha512Params::new(10_000)
@@ -108,8 +319,8 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
 
     autoinstall.insert("ssh".into(), serde_yaml::Value::Mapping(ssh));
 
-    // network (only if dns_servers non-empty)
-    if !cfg.network.dns_servers.is_empty() {
+    // network (static IP or DNS servers)
+    if cfg.static_ip.is_some() || !cfg.network.dns_servers.is_empty() {
         let mut network = serde_yaml::Mapping::new();
         network.insert("version".into(), serde_yaml::Value::Number(2.into()));
 
@@ -120,21 +331,41 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
         match_obj.insert("name".into(), serde_yaml::Value::String("en*".to_string()));
         any.insert("match".into(), serde_yaml::Value::Mapping(match_obj));
 
-        any.insert("dhcp4".into(), serde_yaml::Value::Bool(true));
+        if let Some(static_ip) = &cfg.static_ip {
+            any.insert("dhcp4".into(), serde_yaml::Value::Bool(false));
+            let mut addresses = serde_yaml::Sequence::new();
+            addresses.push(serde_yaml::Value::String(static_ip.clone()));
+            any.insert("addresses".into(), serde_yaml::Value::Sequence(addresses));
 
-        let mut nameservers = serde_yaml::Mapping::new();
-        let addrs: Vec<serde_yaml::Value> = cfg
-            .network
-            .dns_servers
-            .iter()
-            .map(|d| serde_yaml::Value::String(d.clone()))
-            .collect();
-        nameservers.insert("addresses".into(), serde_yaml::Value::Sequence(addrs));
+            if let Some(gateway) = &cfg.gateway {
+                let mut routes = serde_yaml::Sequence::new();
+                let mut route = serde_yaml::Mapping::new();
+                route.insert(
+                    "to".into(),
+                    serde_yaml::Value::String("default".to_string()),
+                );
+                route.insert("via".into(), serde_yaml::Value::String(gateway.clone()));
+                routes.push(serde_yaml::Value::Mapping(route));
+                any.insert("routes".into(), serde_yaml::Value::Sequence(routes));
+            }
+        } else {
+            any.insert("dhcp4".into(), serde_yaml::Value::Bool(true));
+        }
 
-        any.insert(
-            "nameservers".into(),
-            serde_yaml::Value::Mapping(nameservers),
-        );
+        if !cfg.network.dns_servers.is_empty() {
+            let mut nameservers = serde_yaml::Mapping::new();
+            let addrs: Vec<serde_yaml::Value> = cfg
+                .network
+                .dns_servers
+                .iter()
+                .map(|d| serde_yaml::Value::String(d.clone()))
+                .collect();
+            nameservers.insert("addresses".into(), serde_yaml::Value::Sequence(addrs));
+            any.insert(
+                "nameservers".into(),
+                serde_yaml::Value::Mapping(nameservers),
+            );
+        }
 
         ethernets.insert("any".into(), serde_yaml::Value::Mapping(any));
         network.insert("ethernets".into(), serde_yaml::Value::Mapping(ethernets));
@@ -142,11 +373,19 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
         autoinstall.insert("network".into(), serde_yaml::Value::Mapping(network));
     }
 
-    // storage (only if storage_layout set)
+    // storage (with optional encryption)
     if let Some(layout) = &cfg.storage_layout {
         let mut storage = serde_yaml::Mapping::new();
         let mut layout_map = serde_yaml::Mapping::new();
         layout_map.insert("name".into(), serde_yaml::Value::String(layout.clone()));
+        if cfg.encrypt {
+            if let Some(passphrase) = &cfg.encrypt_passphrase {
+                layout_map.insert(
+                    "password".into(),
+                    serde_yaml::Value::String(passphrase.clone()),
+                );
+            }
+        }
         storage.insert("layout".into(), serde_yaml::Value::Mapping(layout_map));
         autoinstall.insert("storage".into(), serde_yaml::Value::Mapping(storage));
     }
@@ -168,13 +407,23 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
         autoinstall.insert("apt".into(), serde_yaml::Value::Mapping(apt));
     }
 
-    // packages
+    // packages (with auto-added feature packages)
     let mut all_packages = cfg.extra_packages.clone();
     if cfg.wallpaper.is_some() {
         all_packages.push("dconf-cli".to_string());
-        all_packages.sort();
-        all_packages.dedup();
     }
+    if cfg.firewall.enabled {
+        all_packages.push("ufw".to_string());
+    }
+    if cfg.containers.podman {
+        all_packages.push("podman".to_string());
+    }
+    if cfg.apt_repos.iter().any(|r| r.starts_with("ppa:")) {
+        all_packages.push("software-properties-common".to_string());
+    }
+    all_packages.sort();
+    all_packages.dedup();
+
     if !all_packages.is_empty() {
         let pkgs: Vec<serde_yaml::Value> = all_packages
             .iter()
@@ -183,41 +432,8 @@ pub fn generate_autoinstall_yaml(cfg: &InjectConfig) -> EngineResult<String> {
         autoinstall.insert("packages".into(), serde_yaml::Value::Sequence(pkgs));
     }
 
-    // late-commands
-    let mut late_commands = Vec::new();
-
-    // NTP servers
-    if !cfg.network.ntp_servers.is_empty() {
-        let ntp_list = cfg.network.ntp_servers.join(" ");
-        late_commands.push(format!(
-            "printf '[Time]\\nNTP={ntp_list}\\n' > /target/etc/systemd/timesyncd.conf"
-        ));
-        late_commands.push("chroot /target systemctl enable systemd-timesyncd".to_string());
-    }
-
-    // Wallpaper
-    if let Some(wallpaper_path) = &cfg.wallpaper {
-        if let Some(filename) = wallpaper_path.file_name() {
-            if let Some(filename_str) = filename.to_str() {
-                let ext = wallpaper_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("jpg");
-                late_commands.push(format!(
-                    "cp /cdrom/wallpaper/{} /target/usr/share/backgrounds/forgeiso-wallpaper.{}",
-                    filename_str, ext
-                ));
-                late_commands.push("mkdir -p /target/etc/dconf/db/local.d".to_string());
-                late_commands.push(
-                    "printf '[org/gnome/desktop/background]\\npicture-uri=\"file:///usr/share/backgrounds/forgeiso-wallpaper.{}\\\"\\n' > /target/etc/dconf/db/local.d/00-forgeiso-background".to_string()
-                );
-                late_commands.push("chroot /target dconf update".to_string());
-            }
-        }
-    }
-
-    // Extra late commands
-    late_commands.extend(cfg.extra_late_commands.clone());
+    // late-commands (using feature helper)
+    let late_commands = build_feature_late_commands(cfg)?;
 
     if !late_commands.is_empty() {
         let cmds: Vec<serde_yaml::Value> = late_commands
@@ -376,14 +592,17 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         autoinstall_map.insert("ssh".into(), serde_yaml::Value::Mapping(ssh));
     }
 
-    // network
-    if !cfg.network.dns_servers.is_empty() || !cfg.network.ntp_servers.is_empty() {
+    // network (static IP or DNS)
+    if cfg.static_ip.is_some()
+        || !cfg.network.dns_servers.is_empty()
+        || !cfg.network.ntp_servers.is_empty()
+    {
         let mut network = autoinstall_map
             .remove("network")
             .and_then(|v| v.as_mapping().cloned())
             .unwrap_or_default();
 
-        if !cfg.network.dns_servers.is_empty() {
+        if cfg.static_ip.is_some() || !cfg.network.dns_servers.is_empty() {
             network.insert("version".into(), serde_yaml::Value::Number(2.into()));
             let mut ethernets = serde_yaml::Mapping::new();
             let mut any = serde_yaml::Mapping::new();
@@ -392,21 +611,42 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
             match_obj.insert("name".into(), serde_yaml::Value::String("en*".to_string()));
             any.insert("match".into(), serde_yaml::Value::Mapping(match_obj));
 
-            any.insert("dhcp4".into(), serde_yaml::Value::Bool(true));
+            if let Some(static_ip) = &cfg.static_ip {
+                any.insert("dhcp4".into(), serde_yaml::Value::Bool(false));
+                let mut addresses = serde_yaml::Sequence::new();
+                addresses.push(serde_yaml::Value::String(static_ip.clone()));
+                any.insert("addresses".into(), serde_yaml::Value::Sequence(addresses));
 
-            let mut nameservers = serde_yaml::Mapping::new();
-            let addrs: Vec<serde_yaml::Value> = cfg
-                .network
-                .dns_servers
-                .iter()
-                .map(|d| serde_yaml::Value::String(d.clone()))
-                .collect();
-            nameservers.insert("addresses".into(), serde_yaml::Value::Sequence(addrs));
+                if let Some(gateway) = &cfg.gateway {
+                    let mut routes = serde_yaml::Sequence::new();
+                    let mut route = serde_yaml::Mapping::new();
+                    route.insert(
+                        "to".into(),
+                        serde_yaml::Value::String("default".to_string()),
+                    );
+                    route.insert("via".into(), serde_yaml::Value::String(gateway.clone()));
+                    routes.push(serde_yaml::Value::Mapping(route));
+                    any.insert("routes".into(), serde_yaml::Value::Sequence(routes));
+                }
+            } else {
+                any.insert("dhcp4".into(), serde_yaml::Value::Bool(true));
+            }
 
-            any.insert(
-                "nameservers".into(),
-                serde_yaml::Value::Mapping(nameservers),
-            );
+            if !cfg.network.dns_servers.is_empty() {
+                let mut nameservers = serde_yaml::Mapping::new();
+                let addrs: Vec<serde_yaml::Value> = cfg
+                    .network
+                    .dns_servers
+                    .iter()
+                    .map(|d| serde_yaml::Value::String(d.clone()))
+                    .collect();
+                nameservers.insert("addresses".into(), serde_yaml::Value::Sequence(addrs));
+
+                any.insert(
+                    "nameservers".into(),
+                    serde_yaml::Value::Mapping(nameservers),
+                );
+            }
 
             ethernets.insert("any".into(), serde_yaml::Value::Mapping(any));
             network.insert("ethernets".into(), serde_yaml::Value::Mapping(ethernets));
@@ -415,7 +655,7 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         autoinstall_map.insert("network".into(), serde_yaml::Value::Mapping(network));
     }
 
-    // storage
+    // storage (with optional encryption)
     if let Some(layout) = &cfg.storage_layout {
         let mut storage = autoinstall_map
             .remove("storage")
@@ -423,6 +663,14 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
             .unwrap_or_default();
         let mut layout_map = serde_yaml::Mapping::new();
         layout_map.insert("name".into(), serde_yaml::Value::String(layout.clone()));
+        if cfg.encrypt {
+            if let Some(passphrase) = &cfg.encrypt_passphrase {
+                layout_map.insert(
+                    "password".into(),
+                    serde_yaml::Value::String(passphrase.clone()),
+                );
+            }
+        }
         storage.insert("layout".into(), serde_yaml::Value::Mapping(layout_map));
         autoinstall_map.insert("storage".into(), serde_yaml::Value::Mapping(storage));
     }
@@ -447,10 +695,19 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         autoinstall_map.insert("apt".into(), serde_yaml::Value::Mapping(apt));
     }
 
-    // packages: merge (dedup)
+    // packages: merge (auto-add + dedup)
     let mut all_packages = cfg.extra_packages.clone();
     if cfg.wallpaper.is_some() {
         all_packages.push("dconf-cli".to_string());
+    }
+    if cfg.firewall.enabled {
+        all_packages.push("ufw".to_string());
+    }
+    if cfg.containers.podman {
+        all_packages.push("podman".to_string());
+    }
+    if cfg.apt_repos.iter().any(|r| r.starts_with("ppa:")) {
+        all_packages.push("software-properties-common".to_string());
     }
 
     if let Some(existing_pkgs) = autoinstall_map
@@ -475,7 +732,7 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         autoinstall_map.insert("packages".into(), serde_yaml::Value::Sequence(pkgs));
     }
 
-    // late-commands: append (not override)
+    // late-commands: existing + new features (appended)
     let mut all_late_commands = Vec::new();
 
     // Existing commands
@@ -490,38 +747,8 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         }
     }
 
-    // NTP servers
-    if !cfg.network.ntp_servers.is_empty() {
-        let ntp_list = cfg.network.ntp_servers.join(" ");
-        all_late_commands.push(format!(
-            "printf '[Time]\\nNTP={ntp_list}\\n' > /target/etc/systemd/timesyncd.conf"
-        ));
-        all_late_commands.push("chroot /target systemctl enable systemd-timesyncd".to_string());
-    }
-
-    // Wallpaper
-    if let Some(wallpaper_path) = &cfg.wallpaper {
-        if let Some(filename) = wallpaper_path.file_name() {
-            if let Some(filename_str) = filename.to_str() {
-                let ext = wallpaper_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("jpg");
-                all_late_commands.push(format!(
-                    "cp /cdrom/wallpaper/{} /target/usr/share/backgrounds/forgeiso-wallpaper.{}",
-                    filename_str, ext
-                ));
-                all_late_commands.push("mkdir -p /target/etc/dconf/db/local.d".to_string());
-                all_late_commands.push(
-                    "printf '[org/gnome/desktop/background]\\npicture-uri=\"file:///usr/share/backgrounds/forgeiso-wallpaper.{}\\\"\\n' > /target/etc/dconf/db/local.d/00-forgeiso-background".to_string()
-                );
-                all_late_commands.push("chroot /target dconf update".to_string());
-            }
-        }
-    }
-
-    // Extra late commands
-    all_late_commands.extend(cfg.extra_late_commands.clone());
+    // Append all feature late-commands
+    all_late_commands.extend(build_feature_late_commands(cfg)?);
 
     if !all_late_commands.is_empty() {
         let cmds: Vec<serde_yaml::Value> = all_late_commands
@@ -583,6 +810,22 @@ mod tests {
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -622,6 +865,22 @@ mod tests {
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -664,6 +923,22 @@ mod tests {
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -701,6 +976,22 @@ mod tests {
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -734,6 +1025,22 @@ mod tests {
             wallpaper: Some(std::path::PathBuf::from("/tmp/bg.jpg")),
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -784,6 +1091,22 @@ autoinstall:
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -822,6 +1145,22 @@ autoinstall:
             wallpaper: None,
             extra_late_commands: vec![],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -858,6 +1197,22 @@ autoinstall:
             wallpaper: None,
             extra_late_commands: vec!["echo new".to_string()],
             no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -869,5 +1224,601 @@ autoinstall:
             result.contains("echo new"),
             "new command should be appended"
         );
+    }
+
+    #[test]
+    fn test_generate_with_user_groups() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: Some("testuser".to_string()),
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: crate::config::UserConfig {
+                groups: vec!["sudo".to_string(), "docker".to_string()],
+                shell: None,
+                sudo_nopasswd: false,
+                sudo_commands: vec![],
+            },
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(
+            yaml.contains("usermod -aG sudo,docker testuser"),
+            "usermod command should add groups"
+        );
+    }
+
+    #[test]
+    fn test_generate_with_sudo_nopasswd() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: Some("testuser".to_string()),
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: crate::config::UserConfig {
+                groups: vec![],
+                shell: None,
+                sudo_nopasswd: true,
+                sudo_commands: vec![],
+            },
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(
+            yaml.contains("NOPASSWD:ALL"),
+            "sudo NOPASSWD should be configured"
+        );
+        assert!(yaml.contains("chmod 440"), "sudoers file permissions");
+    }
+
+    #[test]
+    fn test_generate_with_firewall() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: crate::config::FirewallConfig {
+                enabled: true,
+                default_policy: Some("deny".to_string()),
+                allow_ports: vec!["22".to_string(), "443".to_string()],
+                deny_ports: vec![],
+            },
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("ufw"), "firewall package should be added");
+        assert!(yaml.contains("ufw --force enable"), "ufw enable command");
+        assert!(yaml.contains("ufw allow 22"), "allow port 22");
+    }
+
+    #[test]
+    fn test_generate_with_static_ip() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: Some("10.0.0.5/24".to_string()),
+            gateway: Some("10.0.0.1".to_string()),
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(
+            yaml.contains("dhcp4: false"),
+            "static IP should disable DHCP"
+        );
+        assert!(yaml.contains("10.0.0.5/24"), "static IP should be present");
+        assert!(yaml.contains("10.0.0.1"), "gateway should be present");
+    }
+
+    #[test]
+    fn test_generate_with_proxy() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: crate::config::ProxyConfig {
+                http_proxy: Some("http://proxy.example.com:8080".to_string()),
+                https_proxy: Some("http://proxy.example.com:8443".to_string()),
+                no_proxy: vec!["localhost".to_string(), "127.0.0.1".to_string()],
+            },
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("http_proxy"), "http_proxy in environment");
+        assert!(yaml.contains("Acquire::http::Proxy"), "apt http proxy");
+        assert!(yaml.contains("no_proxy"), "no_proxy in environment");
+    }
+
+    #[test]
+    fn test_generate_with_services() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec!["nginx".to_string()],
+            disable_services: vec!["bluetooth".to_string()],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("systemctl enable nginx"), "enable nginx");
+        assert!(
+            yaml.contains("systemctl disable bluetooth"),
+            "disable bluetooth"
+        );
+    }
+
+    #[test]
+    fn test_generate_with_sysctl() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![
+                ("vm.swappiness".to_string(), "10".to_string()),
+                ("net.ipv4.ip_forward".to_string(), "1".to_string()),
+            ],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("vm.swappiness=10"), "sysctl setting");
+        assert!(
+            yaml.contains("sysctl.d/99-forgeiso.conf"),
+            "sysctl config file"
+        );
+    }
+
+    #[test]
+    fn test_generate_with_swap() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: Some(crate::config::SwapConfig {
+                size_mb: 4096,
+                filename: Some("/swapfile".to_string()),
+                swappiness: Some(10),
+            }),
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("fallocate -l 4096M"), "swap allocation");
+        assert!(yaml.contains("mkswap"), "swap mkswap");
+        assert!(yaml.contains("/etc/fstab"), "fstab entry");
+    }
+
+    #[test]
+    fn test_generate_with_docker() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: Some("admin".to_string()),
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: crate::config::ContainerConfig {
+                docker: true,
+                podman: false,
+                docker_users: vec!["admin".to_string()],
+            },
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("docker-ce"), "docker packages");
+        assert!(yaml.contains("download.docker.com"), "docker repo");
+        assert!(yaml.contains("usermod -aG docker admin"), "docker user");
+    }
+
+    #[test]
+    fn test_generate_with_grub() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: crate::config::GrubConfig {
+                timeout: Some(5),
+                cmdline_extra: vec!["quiet".to_string(), "iommu=on".to_string()],
+                default_entry: None,
+            },
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("GRUB_TIMEOUT=5"), "grub timeout");
+        assert!(yaml.contains("update-grub"), "update-grub command");
+    }
+
+    #[test]
+    fn test_generate_with_mounts() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: None,
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: false,
+            encrypt_passphrase: None,
+            mounts: vec!["/dev/sdb1 /data ext4 defaults 0 2".to_string()],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(yaml.contains("mkdir -p /target/data"), "create mount point");
+        assert!(yaml.contains("/dev/sdb1 /data"), "fstab entry");
+    }
+
+    #[test]
+    fn test_generate_with_encryption() {
+        let cfg = InjectConfig {
+            source: crate::config::IsoSource::from_raw("/tmp/test.iso"),
+            autoinstall_yaml: None,
+            out_name: "out.iso".to_string(),
+            output_label: None,
+            hostname: None,
+            username: None,
+            password: None,
+            realname: None,
+            ssh: Default::default(),
+            network: Default::default(),
+            timezone: None,
+            locale: None,
+            keyboard_layout: None,
+            storage_layout: Some("lvm".to_string()),
+            apt_mirror: None,
+            extra_packages: vec![],
+            wallpaper: None,
+            extra_late_commands: vec![],
+            no_user_interaction: false,
+            user: Default::default(),
+            firewall: Default::default(),
+            proxy: Default::default(),
+            static_ip: None,
+            gateway: None,
+            enable_services: vec![],
+            disable_services: vec![],
+            sysctl: vec![],
+            swap: None,
+            apt_repos: vec![],
+            containers: Default::default(),
+            grub: Default::default(),
+            encrypt: true,
+            encrypt_passphrase: Some("secret".to_string()),
+            mounts: vec![],
+            run_commands: vec![],
+        };
+
+        let yaml = generate_autoinstall_yaml(&cfg).unwrap();
+        assert!(
+            yaml.contains("password:"),
+            "encryption password in storage section"
+        );
+        assert!(yaml.contains("secret"), "passphrase should be in YAML");
     }
 }

@@ -10,8 +10,9 @@ pub mod workspace;
 
 pub use autoinstall::{generate_autoinstall_yaml, hash_password, merge_autoinstall_yaml};
 pub use config::{
-    BuildConfig, Distro, InjectConfig, IsoSource, NetworkConfig, ProfileKind, ScanPolicy,
-    SshConfig, TestingPolicy, ToolStatus,
+    BuildConfig, ContainerConfig, Distro, FirewallConfig, GrubConfig, InjectConfig, IsoSource,
+    NetworkConfig, ProfileKind, ProxyConfig, ScanPolicy, SshConfig, SwapConfig, TestingPolicy,
+    ToolStatus, UserConfig,
 };
 pub use error::{EngineError, EngineResult};
 pub use events::{EngineEvent, EventLevel, EventPhase};

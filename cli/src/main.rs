@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use forgeiso_engine::{
-    BuildConfig, EventPhase, ForgeIsoEngine, InjectConfig, IsoSource, NetworkConfig, ProfileKind,
-    SshConfig,
+    BuildConfig, ContainerConfig, EventPhase, FirewallConfig, ForgeIsoEngine, GrubConfig,
+    InjectConfig, IsoSource, NetworkConfig, ProfileKind, ProxyConfig, SshConfig, SwapConfig,
+    UserConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -143,6 +144,92 @@ enum Commands {
         late_command: Vec<String>,
         #[arg(long)]
         no_user_interaction: bool,
+
+        // User & access management
+        #[arg(long, action = clap::ArgAction::Append)]
+        group: Vec<String>,
+        #[arg(long)]
+        shell: Option<String>,
+        #[arg(long)]
+        sudo_nopasswd: bool,
+        #[arg(long, action = clap::ArgAction::Append)]
+        sudo_command: Vec<String>,
+
+        // Firewall
+        #[arg(long)]
+        firewall: bool,
+        #[arg(long)]
+        firewall_policy: Option<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        allow_port: Vec<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        deny_port: Vec<String>,
+
+        // Network extras
+        #[arg(long)]
+        static_ip: Option<String>,
+        #[arg(long)]
+        gateway: Option<String>,
+        #[arg(long)]
+        http_proxy: Option<String>,
+        #[arg(long)]
+        https_proxy: Option<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        no_proxy: Vec<String>,
+
+        // Services
+        #[arg(long, action = clap::ArgAction::Append)]
+        enable_service: Vec<String>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        disable_service: Vec<String>,
+
+        // Kernel
+        #[arg(long, action = clap::ArgAction::Append)]
+        sysctl: Vec<String>,
+
+        // Swap
+        #[arg(long)]
+        swap_size: Option<u32>,
+        #[arg(long)]
+        swap_file: Option<String>,
+        #[arg(long)]
+        swappiness: Option<u8>,
+
+        // APT repos
+        #[arg(long, action = clap::ArgAction::Append)]
+        apt_repo: Vec<String>,
+
+        // Containers
+        #[arg(long)]
+        docker: bool,
+        #[arg(long)]
+        podman: bool,
+        #[arg(long, action = clap::ArgAction::Append)]
+        docker_user: Vec<String>,
+
+        // GRUB
+        #[arg(long)]
+        grub_timeout: Option<u32>,
+        #[arg(long, action = clap::ArgAction::Append)]
+        grub_cmdline: Vec<String>,
+        #[arg(long)]
+        grub_default: Option<String>,
+
+        // Encryption
+        #[arg(long)]
+        encrypt: bool,
+        #[arg(long)]
+        encrypt_passphrase: Option<String>,
+        #[arg(long)]
+        encrypt_passphrase_file: Option<PathBuf>,
+
+        // Mounts
+        #[arg(long, action = clap::ArgAction::Append)]
+        mount: Vec<String>,
+
+        // Run commands
+        #[arg(long, action = clap::ArgAction::Append)]
+        run_command: Vec<String>,
 
         #[arg(long)]
         json: bool,
@@ -365,6 +452,37 @@ async fn main() -> anyhow::Result<()> {
             wallpaper,
             late_command,
             no_user_interaction,
+            group,
+            shell,
+            sudo_nopasswd,
+            sudo_command,
+            firewall,
+            firewall_policy,
+            allow_port,
+            deny_port,
+            static_ip,
+            gateway,
+            http_proxy,
+            https_proxy,
+            no_proxy,
+            enable_service,
+            disable_service,
+            sysctl,
+            swap_size,
+            swap_file,
+            swappiness,
+            apt_repo,
+            docker,
+            podman,
+            docker_user,
+            grub_timeout,
+            grub_cmdline,
+            grub_default,
+            encrypt,
+            encrypt_passphrase,
+            encrypt_passphrase_file,
+            mount,
+            run_command,
             json,
         } => {
             // Resolve password (priority: stdin > file > cli arg)
@@ -383,6 +501,22 @@ async fn main() -> anyhow::Result<()> {
             for kf in ssh_key_file {
                 all_ssh_keys.push(std::fs::read_to_string(&kf)?.trim().to_string());
             }
+
+            // Resolve encryption passphrase
+            let resolved_encrypt_passphrase = if let Some(ref f) = encrypt_passphrase_file {
+                Some(std::fs::read_to_string(f)?.trim().to_string())
+            } else {
+                encrypt_passphrase
+            };
+
+            // Parse sysctl "key=value" pairs
+            let sysctl_pairs: Vec<(String, String)> = sysctl
+                .iter()
+                .filter_map(|s| {
+                    let mut parts = s.splitn(2, '=');
+                    Some((parts.next()?.to_string(), parts.next()?.to_string()))
+                })
+                .collect();
 
             let cfg = InjectConfig {
                 source: IsoSource::from_raw(source),
@@ -411,6 +545,48 @@ async fn main() -> anyhow::Result<()> {
                 wallpaper,
                 extra_late_commands: late_command,
                 no_user_interaction,
+                user: UserConfig {
+                    groups: group,
+                    shell,
+                    sudo_nopasswd,
+                    sudo_commands: sudo_command,
+                },
+                firewall: FirewallConfig {
+                    enabled: firewall,
+                    default_policy: firewall_policy,
+                    allow_ports: allow_port,
+                    deny_ports: deny_port,
+                },
+                proxy: ProxyConfig {
+                    http_proxy,
+                    https_proxy,
+                    no_proxy,
+                },
+                static_ip,
+                gateway,
+                enable_services: enable_service,
+                disable_services: disable_service,
+                sysctl: sysctl_pairs,
+                swap: swap_size.map(|mb| SwapConfig {
+                    size_mb: mb,
+                    filename: swap_file,
+                    swappiness,
+                }),
+                apt_repos: apt_repo,
+                containers: ContainerConfig {
+                    docker,
+                    podman,
+                    docker_users: docker_user,
+                },
+                grub: GrubConfig {
+                    timeout: grub_timeout,
+                    cmdline_extra: grub_cmdline,
+                    default_entry: grub_default,
+                },
+                encrypt,
+                encrypt_passphrase: resolved_encrypt_passphrase,
+                mounts: mount,
+                run_commands: run_command,
             };
             let result = engine.inject_autoinstall(&cfg, &out).await?;
             if json {
