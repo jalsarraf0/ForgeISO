@@ -128,6 +128,7 @@ export function InjectStage({
           runCommands: lines(inj.runCommands),
           extraLateCommands: lines(inj.extraLateCommands),
           noUserInteraction: inj.noUserInteraction,
+          distro: inj.distro === 'ubuntu' ? null : inj.distro,
         },
       });
       const iso = result.artifacts[0] ?? result.output_dir;
@@ -147,7 +148,7 @@ export function InjectStage({
         <div className="card-header">
           <div>
             <h2>Autoinstall Injection</h2>
-            <p>Embed a cloud-init autoinstall configuration into an Ubuntu ISO for fully unattended installation.</p>
+            <p>Embed an unattended installation configuration into a Linux ISO. Supports Ubuntu (cloud-init), Fedora (Kickstart), and Arch Linux (archinstall).</p>
           </div>
         </div>
         <p className="sidebar-section-title" style={{ marginBottom: 'var(--sp-2)' }}>Quick Presets</p>
@@ -182,7 +183,19 @@ export function InjectStage({
           <Field label="Volume label">
             <TextInput value={inj.outputLabel} onChange={set('outputLabel')} placeholder="Optional (≤32 chars)" disabled={isRunning} />
           </Field>
-          <Field label="Existing autoinstall YAML (merge mode)">
+          <Field label="Target distro">
+            <select
+              value={inj.distro}
+              onChange={(e) => set('distro')(e.target.value)}
+              disabled={isRunning}
+              className="text-input"
+            >
+              <option value="ubuntu">Ubuntu (cloud-init autoinstall)</option>
+              <option value="fedora">Fedora / RHEL (Kickstart ks.cfg) — Beta</option>
+              <option value="arch">Arch Linux (archinstall JSON) — Beta</option>
+            </select>
+          </Field>
+          <Field label="Existing autoinstall YAML (merge mode, Ubuntu only)">
             <TextInput value={inj.autoinstallYaml} onChange={set('autoinstallYaml')} placeholder="Optional path to existing user-data" disabled={isRunning} />
           </Field>
         </div>

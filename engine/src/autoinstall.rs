@@ -3,8 +3,9 @@ use sha_crypt::{sha512_simple, Sha512Params};
 use crate::config::InjectConfig;
 use crate::error::{EngineError, EngineResult};
 
-/// Build all feature-specific late-commands in canonical order
-fn build_feature_late_commands(cfg: &InjectConfig) -> EngineResult<Vec<String>> {
+/// Build all feature-specific late-commands in canonical order.
+/// `pub` so that `kickstart.rs` can reuse this logic for Kickstart `%post`.
+pub fn build_feature_late_commands(cfg: &InjectConfig) -> EngineResult<Vec<String>> {
     let mut cmds = Vec::new();
 
     // 1. NTP servers
@@ -824,6 +825,7 @@ mod tests {
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -879,6 +881,7 @@ mod tests {
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -937,6 +940,7 @@ mod tests {
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -990,6 +994,7 @@ mod tests {
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1039,6 +1044,7 @@ mod tests {
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1105,6 +1111,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -1159,6 +1166,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -1211,6 +1219,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let result = merge_autoinstall_yaml(existing, &cfg).unwrap();
@@ -1267,6 +1276,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1319,6 +1329,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1372,6 +1383,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1418,6 +1430,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1471,6 +1484,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1517,6 +1531,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1568,6 +1583,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1620,6 +1636,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1670,6 +1687,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1720,6 +1738,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1765,6 +1784,7 @@ autoinstall:
             encrypt_passphrase: None,
             mounts: vec!["/dev/sdb1 /data ext4 defaults 0 2".to_string()],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();
@@ -1810,6 +1830,7 @@ autoinstall:
             encrypt_passphrase: Some("secret".to_string()),
             mounts: vec![],
             run_commands: vec![],
+            distro: None,
         };
 
         let yaml = generate_autoinstall_yaml(&cfg).unwrap();

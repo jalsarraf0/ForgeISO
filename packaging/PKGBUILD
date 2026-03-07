@@ -1,6 +1,6 @@
 # Maintainer: Jamal Al-Sarraf <https://github.com/jalsarraf0>
 pkgname=forgeiso
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc="Linux ISO builder and autoinstall injection tool"
 arch=('x86_64')

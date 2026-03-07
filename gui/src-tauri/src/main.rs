@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use forgeiso_engine::{
-    BuildConfig, ContainerConfig, FirewallConfig, ForgeIsoEngine, GrubConfig, InjectConfig,
+    BuildConfig, ContainerConfig, Distro, FirewallConfig, ForgeIsoEngine, GrubConfig, InjectConfig,
     IsoSource, NetworkConfig, ProfileKind, ProxyConfig, SshConfig, SwapConfig, UserConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -118,6 +118,9 @@ struct InjectRequest {
 
     // Misc
     no_user_interaction: bool,
+
+    // Target distro: "ubuntu" (default), "fedora", "arch"
+    distro: Option<String>,
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -222,6 +225,14 @@ async fn inject_iso(
 ) -> Result<serde_json::Value, String> {
     let opt_str = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
 
+    let resolved_distro = match request.distro.as_deref() {
+        None | Some("") | Some("ubuntu") => None,
+        Some("fedora") => Some(Distro::Fedora),
+        Some("arch") => Some(Distro::Arch),
+        Some("mint") => Some(Distro::Mint),
+        Some(_) => None,
+    };
+
     let sysctl: Vec<(String, String)> = request
         .sysctl
         .iter()
@@ -300,6 +311,7 @@ async fn inject_iso(
         encrypt_passphrase: opt_str(request.encrypt_passphrase),
         mounts: request.mounts,
         run_commands: request.run_commands,
+        distro: resolved_distro,
     };
 
     let out = PathBuf::from(request.output_dir);

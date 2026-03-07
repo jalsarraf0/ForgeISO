@@ -36,6 +36,12 @@ pub enum IsoSource {
     Url(String),
 }
 
+impl Default for IsoSource {
+    fn default() -> Self {
+        IsoSource::Path(PathBuf::new())
+    }
+}
+
 impl IsoSource {
     pub fn from_raw(input: impl Into<String>) -> Self {
         let raw = input.into();
@@ -294,7 +300,7 @@ pub struct GrubConfig {
     pub default_entry: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InjectConfig {
     pub source: IsoSource,
     /// Optional: if None, YAML is generated from fields below
@@ -406,6 +412,10 @@ pub struct InjectConfig {
     // Cloud-init runcmd equivalent
     #[serde(default)]
     pub run_commands: Vec<String>,
+
+    // Target distro — None means Ubuntu (default, existing behaviour unchanged)
+    #[serde(default)]
+    pub distro: Option<Distro>,
 }
 
 #[cfg(test)]

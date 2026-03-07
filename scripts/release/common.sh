@@ -52,6 +52,23 @@ forgeiso_build_staging() {
 
   install -Dm755 "${bin_dir}/forgeiso"     "${staging}/usr/bin/forgeiso"
   install -Dm755 "${bin_dir}/forgeiso-tui" "${staging}/usr/bin/forgeiso-tui"
+  install -Dm755 "${root_dir}/scripts/release/forgeiso-desktop" \
+    "${staging}/usr/bin/forgeiso-desktop"
+
+  # .desktop file — double-clicking this launches forgeiso-desktop which
+  # auto-selects GUI > TUI > CLI depending on what is installed and available
+  install -dm755 "${staging}/usr/share/applications"
+  cat > "${staging}/usr/share/applications/forgeiso.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=ForgeISO
+Comment=Cross-distro ISO customization platform
+Exec=forgeiso-desktop
+Icon=forgeiso
+Terminal=false
+Categories=System;Utility;Development;
+StartupNotify=true
+DESKTOP
 
   install -Dm644 "${root_dir}/README.md" \
     "${staging}/usr/share/doc/forgeiso/README.md"

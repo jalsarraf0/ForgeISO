@@ -166,6 +166,7 @@ export type InjectState = {
   runCommands: string;
   extraLateCommands: string;
   noUserInteraction: boolean;
+  distro: string;
 };
 
 export const defaultInjectState: InjectState = {
@@ -186,6 +187,7 @@ export const defaultInjectState: InjectState = {
   encrypt: false, encryptPassphrase: '',
   mounts: '', packages: 'curl\ngit\nvim', aptRepos: '',
   runCommands: '', extraLateCommands: '', noUserInteraction: true,
+  distro: 'ubuntu',
 };
 
 // ── Inject preset templates ───────────────────────────────────────────────────

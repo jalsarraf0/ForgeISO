@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ForgeISO desktop launcher — shipped in all release packages.
+# Prefers the GUI when a display is available, falls back to TUI, then CLI.
+#
+# Installation path: /usr/bin/forgeiso-desktop
+# The .desktop file (Exec=forgeiso-desktop) points here so that
+# double-clicking the icon works from any package (RPM, DEB, pacman).
+#
+# The Tauri GUI binary (forgeiso-gui) is NOT bundled in packages because it
+# requires GTK/WebKit2 native libraries that must be compiled on the host.
+# Build it from source with:
+#   cd gui && npm ci && cargo tauri build
+# then copy gui/src-tauri/target/release/forgeiso-gui to /usr/local/bin/
+
+set -euo pipefail
+
+if { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } \
+   && command -v forgeiso-gui &>/dev/null; then
+    exec forgeiso-gui "$@"
+elif command -v forgeiso-tui &>/dev/null; then
+    exec forgeiso-tui "$@"
+else
+    exec forgeiso "$@"
+fi

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use forgeiso_engine::{
-    BuildConfig, ContainerConfig, EventPhase, FirewallConfig, ForgeIsoEngine, GrubConfig,
+    BuildConfig, ContainerConfig, Distro, EventPhase, FirewallConfig, ForgeIsoEngine, GrubConfig,
     InjectConfig, IsoSource, NetworkConfig, ProfileKind, ProxyConfig, SshConfig, SwapConfig,
     UserConfig,
 };
@@ -230,6 +230,10 @@ enum Commands {
         // Run commands
         #[arg(long, action = clap::ArgAction::Append)]
         run_command: Vec<String>,
+
+        // Target distro: ubuntu (default), fedora, arch
+        #[arg(long, value_name = "DISTRO")]
+        distro: Option<String>,
 
         #[arg(long)]
         json: bool,
@@ -483,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
             encrypt_passphrase_file,
             mount,
             run_command,
+            distro,
             json,
         } => {
             // Resolve password (priority: stdin > file > cli arg)
@@ -507,6 +512,18 @@ async fn main() -> anyhow::Result<()> {
                 Some(std::fs::read_to_string(f)?.trim().to_string())
             } else {
                 encrypt_passphrase
+            };
+
+            // Parse distro
+            let resolved_distro = match distro.as_deref() {
+                None | Some("ubuntu") => None,
+                Some("fedora") => Some(Distro::Fedora),
+                Some("arch") => Some(Distro::Arch),
+                Some("mint") => Some(Distro::Mint),
+                Some(other) => {
+                    eprintln!("ERROR: unknown distro '{other}'. Valid: ubuntu, fedora, arch, mint");
+                    std::process::exit(1);
+                }
             };
 
             // Parse sysctl "key=value" pairs
@@ -587,6 +604,7 @@ async fn main() -> anyhow::Result<()> {
                 encrypt_passphrase: resolved_encrypt_passphrase,
                 mounts: mount,
                 run_commands: run_command,
+                distro: resolved_distro,
             };
             let result = engine.inject_autoinstall(&cfg, &out).await?;
             if json {
