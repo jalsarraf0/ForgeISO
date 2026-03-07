@@ -6,6 +6,8 @@ services:
     command: ["bash", "-c", "scripts/ci/c1-rust.sh"]
     volumes:
       - .:/workspace
+    environment:
+      - CI=true
   c3:
     build:
       context: .
@@ -13,6 +15,8 @@ services:
     command: ["bash", "-c", "scripts/ci/c3-gui.sh"]
     volumes:
       - .:/workspace
+    environment:
+      - CI=true
   c4:
     build:
       context: .
@@ -20,6 +24,8 @@ services:
     command: ["bash", "-c", "scripts/ci/c4-security.sh"]
     volumes:
       - .:/workspace
+    environment:
+      - CI=true
   c5:
     build:
       context: .
@@ -27,6 +33,8 @@ services:
     command: ["bash", "-c", "scripts/ci/c5-integration.sh"]
     volumes:
       - .:/workspace
+    environment:
+      - CI=true
   c6:
     build:
       context: .
@@ -34,3 +42,5 @@ services:
     command: ["bash", "-c", "scripts/ci/c6-e2e.sh"]
     volumes:
       - .:/workspace
+    environment:
+      - CI=true

@@ -115,10 +115,12 @@ fn enrich_with_xorriso(path: &Path, info: &mut IsoMetadata) -> EngineResult<()> 
     );
     info.boot.bios = boot_report.contains("pltf  bios")
         || boot_report.contains("boot img :   1  bios")
-        || boot_report.contains("bios");
+        || boot_report.contains("platform id: 0x00")
+        || boot_report.contains("platform id :  0 = 80x86");
     info.boot.uefi = boot_report.contains("pltf  uefi")
         || boot_report.contains("boot img :   2  uefi")
-        || boot_report.contains("uefi");
+        || boot_report.contains("platform id: 0xef")
+        || boot_report.contains("platform id :  0xef = efi");
 
     if let Some(body) = extract_optional_file(path, "/.disk/info")? {
         infer_from_disk_info(&body, info);
@@ -134,8 +136,9 @@ fn enrich_with_xorriso(path: &Path, info: &mut IsoMetadata) -> EngineResult<()> 
         for candidate in [
             "/casper/filesystem.squashfs",
             "/live/filesystem.squashfs",
-            "/arch/x86_64/airootfs.sfs",
             "/LiveOS/squashfs.img",
+            "/arch/x86_64/airootfs.sfs",
+            "/arch/x86_64/airootfs.erofs",
         ] {
             if iso_path_exists(path, candidate)? {
                 info.rootfs_path = Some(candidate.trim_start_matches('/').to_string());
@@ -189,16 +192,14 @@ fn iso_path_exists(path: &Path, iso_path: &str) -> EngineResult<bool> {
         &[
             "-indev".to_string(),
             path.display().to_string(),
-            "-find".to_string(),
+            "-ls".to_string(),
             iso_path.to_string(),
-            "-exec".to_string(),
-            "report_found".to_string(),
         ],
         None,
     );
 
     match result {
-        Ok(output) => Ok(output.stdout.contains(iso_path) || output.stderr.contains(iso_path)),
+        Ok(output) => Ok(!output.stdout.trim().is_empty()),
         Err(_) => Ok(false),
     }
 }
@@ -253,9 +254,6 @@ fn infer_from_treeinfo(body: &str, info: &mut IsoMetadata) {
             info.edition = Some(value.trim().to_string());
         }
     }
-    if info.rootfs_path.is_none() {
-        info.rootfs_path = Some("LiveOS/squashfs.img".to_string());
-    }
 }
 
 fn infer_from_arch_version(body: &str, info: &mut IsoMetadata) {
@@ -267,9 +265,6 @@ fn infer_from_arch_version(body: &str, info: &mut IsoMetadata) {
         .filter(|line| !line.is_empty());
     if let Some(version) = version {
         info.release = Some(version.to_string());
-    }
-    if info.rootfs_path.is_none() {
-        info.rootfs_path = Some("arch/x86_64/airootfs.sfs".to_string());
     }
 }
 
@@ -283,10 +278,12 @@ fn capture_version(input: &str) -> Option<String> {
 
 fn infer_architecture(input: &str) -> Option<String> {
     let lowered = input.to_lowercase();
-    if lowered.contains("amd64") || lowered.contains("x86_64") {
+    if lowered.contains("amd64") || lowered.contains("x86_64") || lowered.contains("64bit") {
         Some("x86_64".to_string())
     } else if lowered.contains("arm64") || lowered.contains("aarch64") {
         Some("aarch64".to_string())
+    } else if lowered.contains("i386") || lowered.contains("i686") || lowered.contains("32bit") {
+        Some("i686".to_string())
     } else {
         None
     }

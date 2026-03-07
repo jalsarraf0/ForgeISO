@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::broadcast;
 use walkdir::WalkDir;
 
+use crate::autoinstall::{generate_autoinstall_yaml, merge_autoinstall_yaml};
 use crate::config::{BuildConfig, IsoSource};
 use crate::error::{EngineError, EngineResult};
 use crate::events::{EngineEvent, EventPhase};
@@ -50,6 +51,29 @@ pub struct TestResult {
     pub uefi: bool,
     pub logs: Vec<PathBuf>,
     pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyResult {
+    pub filename: String,
+    pub expected: String,
+    pub actual: String,
+    pub matched: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffEntry {
+    pub path: String,
+    pub base_size: u64,
+    pub target_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IsoDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<DiffEntry>,
+    pub unchanged: usize,
 }
 
 #[derive(Clone)]
@@ -199,6 +223,9 @@ impl ForgeIsoEngine {
             ],
             None,
         )?;
+        // xorriso extracts files with read-only permissions; make writable
+        // so we can modify the tree and clean up afterwards.
+        chmod_recursive_writable(&extract_dir);
 
         let mut warnings = iso.warnings.clone();
         let mut rootfs_dir = None;
@@ -208,10 +235,11 @@ impl ForgeIsoEngine {
                 require_tools(&["unsquashfs", "mksquashfs"])?;
                 let unpack_dir = workspace.work.join("rootfs");
                 std::fs::create_dir_all(&unpack_dir)?;
-                run_command_capture(
+                run_command_lossy(
                     "unsquashfs",
                     &[
                         "-f".to_string(),
+                        "-no-xattrs".to_string(),
                         "-d".to_string(),
                         unpack_dir.display().to_string(),
                         rootfs_image.display().to_string(),
@@ -231,6 +259,7 @@ impl ForgeIsoEngine {
                         "-comp".to_string(),
                         "xz".to_string(),
                         "-noappend".to_string(),
+                        "-no-xattrs".to_string(),
                     ],
                     None,
                 )?;
@@ -283,8 +312,21 @@ impl ForgeIsoEngine {
             format!("build completed: {}", output_iso.display()),
         ));
 
+        let workspace_root = workspace.root.clone();
+        if !cfg.keep_workdir {
+            if let Err(e) = remove_dir_all_force(&workspace.root) {
+                self.emit(EngineEvent::warn(
+                    EventPhase::Complete,
+                    format!(
+                        "failed to clean up workspace {}: {e}",
+                        workspace.root.display()
+                    ),
+                ));
+            }
+        }
+
         Ok(BuildResult {
-            workspace_root: workspace.root,
+            workspace_root,
             output_dir: out_dir.to_path_buf(),
             report_json,
             report_html,
@@ -365,7 +407,8 @@ impl ForgeIsoEngine {
             if body.contains("no bootable option or device")
                 || body.contains("failed to load boot")
                 || body.contains("kernel panic")
-                || body.contains("error:")
+                || body.contains("boot failed")
+                || body.contains("no bootable device")
             {
                 passed = false;
             }
@@ -445,10 +488,10 @@ impl ForgeIsoEngine {
                 std::fs::create_dir_all(cache_root)?;
                 let target = cache_root.join(download_filename(url));
                 self.emit(EngineEvent::info(
-                    EventPhase::Build,
+                    EventPhase::Download,
                     format!("downloading source ISO from {url}"),
                 ));
-                download_to_path(url, &target).await?;
+                self.download_to_path(url, &target).await?;
                 Ok(ResolvedIso {
                     source_path: target.clone(),
                     source_kind: SourceKind::DownloadedUrl,
@@ -457,6 +500,326 @@ impl ForgeIsoEngine {
                 })
             }
         }
+    }
+
+    async fn download_to_path(&self, url: &str, output: &Path) -> EngineResult<()> {
+        let response = reqwest::get(url).await?;
+        if !response.status().is_success() {
+            return Err(EngineError::Network(format!(
+                "download failed with status {}",
+                response.status()
+            )));
+        }
+
+        let total_size = response.content_length().unwrap_or(0);
+        let mut file = tokio::fs::File::create(output).await?;
+        let mut response = response;
+        let mut downloaded = 0u64;
+        let emit_interval = 512 * 1024; // 512 KB
+
+        while let Some(chunk) = response.chunk().await? {
+            file.write_all(&chunk).await?;
+            downloaded += chunk.len() as u64;
+
+            if (downloaded.is_multiple_of(emit_interval) || downloaded == total_size)
+                && total_size > 0
+            {
+                let msg = format!("{}/{} bytes", downloaded, total_size);
+                self.emit(EngineEvent::info(EventPhase::Download, msg));
+            }
+        }
+        file.flush().await?;
+        Ok(())
+    }
+
+    pub async fn verify(&self, source: &str, sums_url: Option<&str>) -> EngineResult<VerifyResult> {
+        self.emit(EngineEvent::info(
+            EventPhase::Verify,
+            "verifying ISO checksum",
+        ));
+
+        let resolved = self
+            .resolve_source(&IsoSource::from_raw(source), &default_cache_root()?)
+            .await?;
+        let metadata = inspect_iso(
+            &resolved.source_path,
+            resolved.source_kind,
+            resolved.source_value,
+        )?;
+
+        let filename = resolved
+            .source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| EngineError::InvalidConfig("Unable to get ISO filename".to_string()))?;
+
+        let effective_sums_url = if let Some(url) = sums_url {
+            url.to_string()
+        } else if let Some(distro) = metadata.distro {
+            if let Some(release) = &metadata.release {
+                match distro {
+                    crate::config::Distro::Ubuntu => {
+                        format!("https://releases.ubuntu.com/{}/SHA256SUMS", release)
+                    }
+                    _ => {
+                        return Err(EngineError::InvalidConfig(
+                            "Auto-detection of sums URL not supported for this distro".to_string(),
+                        ))
+                    }
+                }
+            } else {
+                return Err(EngineError::InvalidConfig(
+                    "Release information not available for auto-detection".to_string(),
+                ));
+            }
+        } else {
+            return Err(EngineError::InvalidConfig(
+                "sums_url must be provided or ISO must be recognized as Ubuntu".to_string(),
+            ));
+        };
+
+        self.emit(EngineEvent::info(
+            EventPhase::Verify,
+            format!("fetching checksums from {}", effective_sums_url),
+        ));
+
+        let sums_content = reqwest::get(&effective_sums_url).await?.text().await?;
+
+        // Parse SHA256SUMS format: <hash>  <filename>
+        let mut expected_hash = None;
+        for line in sums_content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let hash = parts[0];
+                let file_path = parts[1].trim_start_matches('*');
+                if file_path.ends_with(&filename) || file_path == filename {
+                    expected_hash = Some(hash.to_string());
+                    break;
+                }
+            }
+        }
+
+        let expected = expected_hash
+            .ok_or_else(|| EngineError::NotFound(format!("No checksum found for {}", filename)))?;
+
+        let matched = metadata.sha256 == expected;
+        self.emit(EngineEvent::info(
+            EventPhase::Verify,
+            if matched {
+                "checksum matches!".to_string()
+            } else {
+                "checksum mismatch!".to_string()
+            },
+        ));
+
+        Ok(VerifyResult {
+            filename,
+            expected,
+            actual: metadata.sha256,
+            matched,
+        })
+    }
+
+    pub async fn inject_autoinstall(
+        &self,
+        cfg: &crate::config::InjectConfig,
+        out: &Path,
+    ) -> EngineResult<BuildResult> {
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            "starting autoinstall injection",
+        ));
+
+        // Create workspace for injection
+        let workspace = Workspace::create(&cache_subdir("inject")?, "inject")?;
+        let work_dir = workspace.root;
+
+        // Resolve the source ISO
+        let resolved = self.resolve_source(&cfg.source, &work_dir).await?;
+        let metadata = inspect_iso(
+            &resolved.source_path,
+            resolved.source_kind,
+            resolved.source_value,
+        )?;
+
+        // Create overlay directory with cloud-init files
+        let nocloud_dir = work_dir.join("overlay").join("nocloud");
+        std::fs::create_dir_all(&nocloud_dir)?;
+
+        // Generate or merge user-data
+        let user_data = match &cfg.autoinstall_yaml {
+            Some(path) => {
+                let existing = std::fs::read_to_string(path)?;
+                merge_autoinstall_yaml(&existing, cfg)?
+            }
+            None => generate_autoinstall_yaml(cfg)?,
+        };
+        std::fs::write(nocloud_dir.join("user-data"), &user_data)?;
+
+        // Create meta-data (required by cloud-init, can be empty)
+        std::fs::write(nocloud_dir.join("meta-data"), "")?;
+
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            "created cloud-init overlay",
+        ));
+
+        // Copy wallpaper file if provided
+        if let Some(src) = &cfg.wallpaper {
+            let fname = src
+                .file_name()
+                .ok_or_else(|| EngineError::InvalidConfig("invalid wallpaper path".to_string()))?;
+            let dest = work_dir.join("wallpaper");
+            std::fs::create_dir_all(&dest)?;
+            std::fs::copy(src, dest.join(fname))?;
+        }
+
+        // Extract ISO
+        let extract_dir = work_dir.join("extract");
+        std::fs::create_dir_all(&extract_dir)?;
+        let output = run_command_lossy(
+            "xorriso",
+            &[
+                "-indev".to_string(),
+                resolved.source_path.to_string_lossy().to_string(),
+                "-extract".to_string(),
+                "/".to_string(),
+                extract_dir.to_string_lossy().to_string(),
+            ],
+            None,
+        )?;
+        if output.status != 0 {
+            return Err(EngineError::Runtime(format!(
+                "xorriso extract failed: {}",
+                output.stderr
+            )));
+        }
+
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            "extracted ISO filesystem",
+        ));
+
+        // Copy overlay to extracted ISO
+        let iso_nocloud = extract_dir.join("cdrom").join("nocloud");
+        std::fs::create_dir_all(&iso_nocloud)?;
+        for entry in std::fs::read_dir(&nocloud_dir)? {
+            let entry = entry?;
+            let src = entry.path();
+            let dst = iso_nocloud.join(entry.file_name());
+            std::fs::copy(&src, &dst)?;
+        }
+
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            "injected cloud-init files",
+        ));
+
+        // Copy wallpaper file to extracted ISO if provided
+        if let Some(src) = &cfg.wallpaper {
+            let fname = src.file_name().unwrap();
+            let iso_wp = extract_dir.join("cdrom").join("wallpaper");
+            std::fs::create_dir_all(&iso_wp)?;
+            std::fs::copy(work_dir.join("wallpaper").join(fname), iso_wp.join(fname))?;
+        }
+
+        // Patch boot configurations (grub.cfg and isolinux.cfg)
+        let kernel_append = " autoinstall ds=nocloud;s=/cdrom/nocloud/";
+        patch_boot_configs(&extract_dir, kernel_append)?;
+
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            "patched boot configurations",
+        ));
+
+        // Repack ISO
+        std::fs::create_dir_all(out)?;
+        let output_path = out.join(&cfg.out_name);
+
+        let args = repack_iso_args(
+            &resolved.source_path,
+            &extract_dir,
+            &output_path,
+            cfg.output_label.as_deref(),
+        )?;
+
+        let output = run_command_lossy("xorriso", &args, None)?;
+        if output.status != 0 {
+            return Err(EngineError::Runtime(format!(
+                "xorriso repack failed: {}",
+                output.stderr
+            )));
+        }
+
+        self.emit(EngineEvent::info(
+            EventPhase::Inject,
+            format!("created output ISO: {}", output_path.display()),
+        ));
+
+        Ok(BuildResult {
+            workspace_root: work_dir.to_path_buf(),
+            output_dir: out.to_path_buf(),
+            report_json: work_dir.join("report.json"),
+            report_html: work_dir.join("report.html"),
+            artifacts: vec![output_path],
+            iso: metadata,
+        })
+    }
+
+    pub async fn diff_isos(&self, base: &Path, target: &Path) -> EngineResult<IsoDiff> {
+        self.emit(EngineEvent::info(
+            EventPhase::Diff,
+            "comparing ISO filesystems",
+        ));
+
+        let base_files = get_iso_file_list(base)?;
+        let target_files = get_iso_file_list(target)?;
+
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut modified = Vec::new();
+        let mut unchanged = 0;
+
+        for (path, target_size) in &target_files {
+            if let Some(base_size) = base_files.get(path) {
+                if base_size == target_size {
+                    unchanged += 1;
+                } else {
+                    modified.push(DiffEntry {
+                        path: path.clone(),
+                        base_size: *base_size,
+                        target_size: *target_size,
+                    });
+                }
+            } else {
+                added.push(path.clone());
+            }
+        }
+
+        for path in base_files.keys() {
+            if !target_files.contains_key(path) {
+                removed.push(path.clone());
+            }
+        }
+
+        self.emit(EngineEvent::info(
+            EventPhase::Diff,
+            format!(
+                "diff: {} added, {} removed, {} modified, {} unchanged",
+                added.len(),
+                removed.len(),
+                modified.len(),
+                unchanged
+            ),
+        ));
+
+        Ok(IsoDiff {
+            added,
+            removed,
+            modified,
+            unchanged,
+        })
     }
 }
 
@@ -467,19 +830,7 @@ pub fn default_cache_root() -> EngineResult<PathBuf> {
         return Ok(path);
     }
 
-    if let Ok(path) = std::env::var("XDG_CACHE_HOME") {
-        let path = PathBuf::from(path).join("forgeiso");
-        std::fs::create_dir_all(&path)?;
-        return Ok(path);
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        let path = PathBuf::from(home).join(".cache").join("forgeiso");
-        std::fs::create_dir_all(&path)?;
-        return Ok(path);
-    }
-
-    let path = std::env::current_dir()?.join(".forgeiso-cache");
+    let path = PathBuf::from("/tmp/forgeoutput");
     std::fs::create_dir_all(&path)?;
     Ok(path)
 }
@@ -529,6 +880,31 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// Like `run_command_capture` but tolerates non-zero exit codes (e.g. unsquashfs
+/// returning exit 2 for device-node warnings when not running as root).
+pub fn run_command_lossy(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> EngineResult<CommandOutput> {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| EngineError::Runtime(format!("failed to run {program}: {e}")))?;
+
+    Ok(CommandOutput {
+        program: program.to_string(),
+        status: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
 pub fn sha256_file(path: &Path) -> EngineResult<String> {
     use sha2::{Digest, Sha256};
 
@@ -574,7 +950,7 @@ fn require_tools(tools: &[&str]) -> EngineResult<()> {
 }
 
 fn is_squashfs_path(path: &str) -> bool {
-    path.ends_with(".squashfs") || path.ends_with(".sfs")
+    path.ends_with(".squashfs") || path.ends_with(".sfs") || path.ends_with(".erofs")
 }
 
 fn write_iso_manifest(
@@ -635,24 +1011,6 @@ fn copy_dir_contents(from: &Path, to: &Path) -> EngineResult<()> {
             std::fs::copy(entry.path(), target)?;
         }
     }
-    Ok(())
-}
-
-async fn download_to_path(url: &str, output: &Path) -> EngineResult<()> {
-    let response = reqwest::get(url).await?;
-    if !response.status().is_success() {
-        return Err(EngineError::Network(format!(
-            "download failed with status {}",
-            response.status()
-        )));
-    }
-
-    let mut file = tokio::fs::File::create(output).await?;
-    let mut response = response;
-    while let Some(chunk) = response.chunk().await? {
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
     Ok(())
 }
 
@@ -815,6 +1173,35 @@ fn ovmf_path() -> EngineResult<PathBuf> {
     ))
 }
 
+/// Recursively grant user-write permission before removal so files extracted
+/// from ISOs (which may carry read-only permissions) can be deleted.
+fn remove_dir_all_force(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o700);
+        let _ = std::fs::set_permissions(entry.path(), perms);
+    }
+    std::fs::remove_dir_all(path)
+}
+
+fn chmod_recursive_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o700);
+        let _ = std::fs::set_permissions(entry.path(), perms);
+    }
+}
+
 impl From<TestResult> for TestSummary {
     fn from(value: TestResult) -> Self {
         Self {
@@ -824,6 +1211,69 @@ impl From<TestResult> for TestSummary {
             passed: value.passed,
         }
     }
+}
+
+fn get_iso_file_list(iso_path: &Path) -> EngineResult<std::collections::HashMap<String, u64>> {
+    use std::process::Command;
+
+    let output = Command::new("xorriso")
+        .args([
+            "-indev",
+            iso_path.to_str().unwrap(),
+            "-find",
+            "/",
+            "-type",
+            "f",
+            "-exec",
+            "stat_lstat",
+            ".",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(EngineError::Runtime(format!(
+            "xorriso failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let mut files = std::collections::HashMap::new();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            if let Ok(size) = parts[0].parse::<u64>() {
+                let path = parts[1..].join(" ");
+                files.insert(path, size);
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+fn patch_boot_configs(extract_dir: &Path, kernel_append: &str) -> EngineResult<()> {
+    // Patch grub.cfg
+    let grub_path = extract_dir.join("boot").join("grub").join("grub.cfg");
+    if grub_path.exists() {
+        let content = std::fs::read_to_string(&grub_path)?;
+        let patched = content.replace(
+            "linux\t/boot/vmlinuz",
+            &format!("linux\t/boot/vmlinuz{}", kernel_append),
+        );
+        std::fs::write(&grub_path, patched)?;
+    }
+
+    // Patch isolinux.cfg
+    let isolinux_path = extract_dir.join("isolinux").join("isolinux.cfg");
+    if isolinux_path.exists() {
+        let content = std::fs::read_to_string(&isolinux_path)?;
+        let patched = content.replace("/vmlinuz", &format!("/vmlinuz{}", kernel_append));
+        std::fs::write(&isolinux_path, patched)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

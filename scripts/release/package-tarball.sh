@@ -2,18 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-VERSION=$(grep '^version =' Cargo.toml 2>/dev/null | head -n1 | cut -d'"' -f2 || echo "0.1.0")
+VERSION=$(grep 'version =' "${ROOT_DIR}/Cargo.toml" 2>/dev/null | grep '\[workspace.package\]' -A 1 | grep 'version' | cut -d'"' -f2 || echo "0.1.0")
 STAGE_DIR="${ROOT_DIR}/dist/forgeiso-${VERSION}-linux-x86_64"
 ARCHIVE="${ROOT_DIR}/dist/forgeiso-${VERSION}-linux-x86_64.tar.gz"
-GUI_BIN="${ROOT_DIR}/gui/src-tauri/target/release/forgeiso-gui"
 
 rm -rf "${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}/bin"
 
 for bin in \
   "${ROOT_DIR}/target/release/forgeiso" \
-  "${ROOT_DIR}/target/release/forgeiso-tui" \
-  "${GUI_BIN}"; do
+  "${ROOT_DIR}/target/release/forgeiso-tui"; do
   if [[ ! -x "${bin}" ]]; then
     echo "missing release binary: ${bin}" >&2
     exit 1

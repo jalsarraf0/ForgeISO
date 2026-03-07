@@ -21,6 +21,10 @@ pub enum EventPhase {
     Test,
     Report,
     Inspect,
+    Download,
+    Verify,
+    Inject,
+    Diff,
     Complete,
 }
 

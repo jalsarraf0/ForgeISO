@@ -101,7 +101,7 @@ impl App {
             selected_field: 0,
             editing: false,
             source: String::new(),
-            output_dir: "./artifacts".to_string(),
+            output_dir: "/tmp/forgeoutput".to_string(),
             build_name: "forgeiso-local".to_string(),
             overlay_dir: String::new(),
             profile: "minimal".to_string(),
@@ -204,9 +204,14 @@ impl App {
         match engine.build(&cfg, &out_dir).await {
             Ok(result) => {
                 self.last_iso = result.artifacts.first().cloned();
-                self.status = format!("Build completed: {}", result.artifacts[0].display());
+                let iso_label = result
+                    .artifacts
+                    .first()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| result.output_dir.display().to_string());
+                self.status = format!("Build completed: {iso_label}");
                 self.inspection = vec![
-                    format!("Built ISO: {}", result.artifacts[0].display()),
+                    format!("Built ISO: {iso_label}"),
                     format!("Report JSON: {}", result.report_json.display()),
                     format!("Report HTML: {}", result.report_html.display()),
                 ];
