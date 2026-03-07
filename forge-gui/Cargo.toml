@@ -1,0 +1,20 @@
+[package]
+name = "forge-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "forge-gui"
+path = "src/main.rs"
+
+[dependencies]
+forgeiso-engine = { path = "../engine" }
+chrono = { workspace = true }
+eframe = { version = "0.33", features = ["persistence"] }
+egui = "0.33"
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

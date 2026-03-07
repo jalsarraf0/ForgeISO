@@ -52,6 +52,10 @@ forgeiso_build_staging() {
 
   install -Dm755 "${bin_dir}/forgeiso"     "${staging}/usr/bin/forgeiso"
   install -Dm755 "${bin_dir}/forgeiso-tui" "${staging}/usr/bin/forgeiso-tui"
+  # egui GUI — optional, only staged if built
+  if [[ -f "${bin_dir}/forge-gui" ]]; then
+    install -Dm755 "${bin_dir}/forge-gui" "${staging}/usr/bin/forge-gui"
+  fi
   install -Dm755 "${root_dir}/scripts/release/forgeiso-desktop" \
     "${staging}/usr/bin/forgeiso-desktop"
 

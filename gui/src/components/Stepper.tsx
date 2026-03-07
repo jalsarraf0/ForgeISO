@@ -9,10 +9,10 @@ type StepDef = {
 };
 
 const STEPS: StepDef[] = [
-  { id: 'build',      label: 'Build',    sublabel: 'Fetch & package',     num: 1 },
-  { id: 'inject',     label: 'Inject',   sublabel: 'Autoinstall config',   num: 2 },
-  { id: 'verify',     label: 'Verify',   sublabel: 'SHA-256 integrity',    num: 3 },
-  { id: 'diff',       label: 'Diff',     sublabel: 'Compare ISOs',         num: 4 },
+  { id: 'inject',     label: 'Inject',   sublabel: 'Autoinstall config',   num: 1 },
+  { id: 'verify',     label: 'Verify',   sublabel: 'SHA-256 integrity',    num: 2 },
+  { id: 'diff',       label: 'Diff',     sublabel: 'Compare ISOs',         num: 3 },
+  { id: 'build',      label: 'Build',    sublabel: 'Fetch & package',      num: 4 },
   { id: 'completion', label: 'Complete', sublabel: 'Artifacts ready',      num: 5 },
 ];
 

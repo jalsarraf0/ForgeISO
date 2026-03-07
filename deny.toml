@@ -42,6 +42,10 @@ allow = [
     "OpenSSL",
     # Community Data License Agreement Permissive 2.0 (used by webpki-roots)
     "CDLA-Permissive-2.0",
+    # SIL Open Font License 1.1 — OSI + FSF approved; used by egui bundled fonts
+    "OFL-1.1",
+    # Ubuntu Font Licence — used by epaint_default_fonts (egui)
+    "Ubuntu-font-1.0",
 ]
 
 # ring uses a compound OpenSSL + ISC + MIT license in its source tree

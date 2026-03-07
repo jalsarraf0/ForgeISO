@@ -47,70 +47,23 @@ if [[ -f "${PKGBUILD}" ]]; then
   fi
 fi
 
-# ── 3. GUI — package.json ────────────────────────────────────────────────────
-GUI_PKG="${ROOT_DIR}/gui/package.json"
-if [[ -f "${GUI_PKG}" ]]; then
-  OLD_GUI="$(python3 -c "import sys,json; print(json.load(open('${GUI_PKG}'))['version'])")"
-  if [[ "${OLD_GUI}" == "${NEW_VERSION}" ]]; then
-    echo "  gui/package.json already at ${NEW_VERSION}, skipping"
-  else
-    sed -i "s/\"version\": \"${OLD_GUI}\"/\"version\": \"${NEW_VERSION}\"/" "${GUI_PKG}"
-    echo "  gui/package.json: ${OLD_GUI} → ${NEW_VERSION}"
-  fi
-fi
-
-# ── 4. GUI — src-tauri/Cargo.toml ───────────────────────────────────────────
-GUI_CARGO="${ROOT_DIR}/gui/src-tauri/Cargo.toml"
-if [[ -f "${GUI_CARGO}" ]]; then
-  OLD_GUI_CARGO="$(grep -E '^version = ' "${GUI_CARGO}" | head -1 | sed 's/version = "\(.*\)"/\1/')"
-  if [[ "${OLD_GUI_CARGO}" == "${NEW_VERSION}" ]]; then
-    echo "  gui/src-tauri/Cargo.toml already at ${NEW_VERSION}, skipping"
-  else
-    sed -i "0,/^version = \"${OLD_GUI_CARGO}\"/{s/^version = \"${OLD_GUI_CARGO}\"/version = \"${NEW_VERSION}\"/}" "${GUI_CARGO}"
-    echo "  gui/src-tauri/Cargo.toml: ${OLD_GUI_CARGO} → ${NEW_VERSION}"
-  fi
-fi
-
-# ── 5. GUI — tauri.conf.json ─────────────────────────────────────────────────
-TAURI_CONF="${ROOT_DIR}/gui/src-tauri/tauri.conf.json"
-if [[ -f "${TAURI_CONF}" ]]; then
-  OLD_TAURI="$(python3 -c "import sys,json; print(json.load(open('${TAURI_CONF}')).get('version',''))")"
-  if [[ "${OLD_TAURI}" == "${NEW_VERSION}" ]]; then
-    echo "  gui/src-tauri/tauri.conf.json already at ${NEW_VERSION}, skipping"
-  else
-    python3 - <<PYEOF
-import json, sys
-with open('${TAURI_CONF}') as f:
-    d = json.load(f)
-d['version'] = '${NEW_VERSION}'
-with open('${TAURI_CONF}', 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-PYEOF
-    echo "  gui/src-tauri/tauri.conf.json: ${OLD_TAURI} → ${NEW_VERSION}"
-  fi
-fi
-
-# ── 6. Regenerate Cargo.lock ─────────────────────────────────────────────────
+# ── 3. Regenerate Cargo.lock ─────────────────────────────────────────────────
 echo "  Regenerating Cargo.lock..."
 (cd "${ROOT_DIR}" && cargo generate-lockfile --quiet)
 echo "  Cargo.lock updated"
 
-# ── 7. Summary ──────────────────────────────────────────────────────────────
+# ── 4. Summary ──────────────────────────────────────────────────────────────
 echo ""
 echo "Version bump complete: v${OLD_VERSION:-unknown} → v${NEW_VERSION}"
 echo ""
 echo "Changed files:"
 echo "  ${CARGO_TOML}"
-[[ -f "${PKGBUILD}" ]]   && echo "  ${PKGBUILD}"
-[[ -f "${GUI_PKG}" ]]    && echo "  ${GUI_PKG}"
-[[ -f "${GUI_CARGO}" ]]  && echo "  ${GUI_CARGO}"
-[[ -f "${TAURI_CONF}" ]] && echo "  ${TAURI_CONF}"
+[[ -f "${PKGBUILD}" ]] && echo "  ${PKGBUILD}"
 echo "  ${ROOT_DIR}/Cargo.lock"
 echo ""
 echo "Next steps:"
-echo "  1. cargo build --release -p forgeiso-cli  # verify it compiles"
-echo "  2. git add Cargo.toml Cargo.lock packaging/PKGBUILD gui/package.json gui/src-tauri/Cargo.toml gui/src-tauri/tauri.conf.json"
+echo "  1. cargo build --workspace --release    # verify all crates compile"
+echo "  2. git add Cargo.toml Cargo.lock packaging/PKGBUILD"
 echo "  3. git commit -m 'chore: bump version to v${NEW_VERSION}'"
 echo "  4. Push branch + open PR"
 echo "  5. After merge: git tag -a v${NEW_VERSION} -m 'Release v${NEW_VERSION}' && git push origin v${NEW_VERSION}"

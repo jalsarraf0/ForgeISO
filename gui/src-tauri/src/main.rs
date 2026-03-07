@@ -121,6 +121,53 @@ struct InjectRequest {
 
     // Target distro: "ubuntu" (default), "fedora", "arch"
     distro: Option<String>,
+
+    // Branding
+    wallpaper_path: Option<String>,
+}
+
+// ── Native file / folder picker (zenity) ─────────────────────────────────────
+
+/// Open a native OS file-picker dialog filtered to ISO files.
+/// Returns the selected path, or null if cancelled.
+#[tauri::command]
+async fn pick_iso_file() -> Option<String> {
+    pick_with_zenity(&[
+        "--file-selection",
+        "--title=Select ISO Image",
+        "--file-filter=ISO Images (*.iso)|*.iso",
+    ])
+    .await
+}
+
+/// Open a native OS folder-picker dialog.
+/// Returns the selected path, or null if cancelled.
+#[tauri::command]
+async fn pick_folder() -> Option<String> {
+    pick_with_zenity(&["--file-selection", "--directory", "--title=Select Output Directory"])
+        .await
+}
+
+/// Open a native OS file-picker for any file (wallpaper images, YAML, etc.).
+#[tauri::command]
+async fn pick_file() -> Option<String> {
+    pick_with_zenity(&["--file-selection", "--title=Select File"]).await
+}
+
+async fn pick_with_zenity(args: &[&str]) -> Option<String> {
+    // Build the argument list as owned strings so they can be moved into spawn
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let result = tokio::process::Command::new("zenity")
+        .args(&args)
+        .output()
+        .await
+        .ok()?;
+    if result.status.success() {
+        let path = String::from_utf8_lossy(&result.stdout).trim().to_string();
+        if !path.is_empty() { Some(path) } else { None }
+    } else {
+        None
+    }
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -273,7 +320,7 @@ async fn inject_iso(
         storage_layout: opt_str(request.storage_layout),
         apt_mirror: opt_str(request.apt_mirror),
         extra_packages: request.packages,
-        wallpaper: None,
+        wallpaper: opt_str(request.wallpaper_path).map(PathBuf::from),
         extra_late_commands: request.extra_late_commands,
         no_user_interaction: request.no_user_interaction,
         user: UserConfig {
@@ -420,6 +467,9 @@ fn main() {
             validate_iso9660,
             diff_isos,
             start_event_stream,
+            pick_iso_file,
+            pick_folder,
+            pick_file,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ForgeISO GUI");

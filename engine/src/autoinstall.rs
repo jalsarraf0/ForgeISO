@@ -491,9 +491,9 @@ pub fn merge_autoinstall_yaml(existing: &str, cfg: &InjectConfig) -> EngineResul
         );
         root = serde_yaml::Value::Mapping(new_root);
         root.get_mut("autoinstall")
-            .unwrap()
+            .expect("just inserted autoinstall key")
             .as_mapping_mut()
-            .unwrap()
+            .expect("just inserted autoinstall as Mapping")
     };
 
     // Override scalar fields from cfg

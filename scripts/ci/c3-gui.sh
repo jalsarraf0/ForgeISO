@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
+# C3: forge-gui (egui) build check — fmt + clippy + build
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$ROOT_DIR/.cargo-tmp"
 export TMPDIR="$ROOT_DIR/.cargo-tmp"
-cd "$ROOT_DIR/gui"
+cd "$ROOT_DIR"
 
-if [[ "${CI:-false}" == "true" ]]; then
-  # In CI the node_modules volume is always a fresh named volume (empty mount
-  # point); the -d check passes even when empty, so always install here.
-  npm ci
-elif [[ ! -f node_modules/.bin/tsc ]]; then
-  npm ci --offline
-fi
-npm run lint
-npm run build
+echo "▶ [C3] fmt check..."
+cargo fmt --manifest-path forge-gui/Cargo.toml --all --check
 
-cd "$ROOT_DIR/gui/src-tauri"
-cargo check
+echo "▶ [C3] clippy..."
+cargo clippy -p forge-gui --all-targets -- -D warnings
+
+echo "▶ [C3] build (dev)..."
+cargo build -p forge-gui
+
+echo "▶ [C3] state/worker compile check..."
+cargo check -p forge-gui
+
+echo "▶ [C3] OK — forge-gui builds cleanly"

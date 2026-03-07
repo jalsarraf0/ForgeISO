@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Dispatch } from 'react';
 import type { IsoDiff, JobProgress } from '../types';
 import type { AppAction } from '../store';
-import { Field, TextInput } from '../components/forms';
+import { Field, FileInput } from '../components/forms';
 import { JobProgressCard } from '../components/JobProgress';
+import { useStageAutoAdvance } from '../hooks';
 
 type Filter = 'all' | 'added' | 'removed' | 'modified';
 
@@ -41,6 +42,11 @@ export function DiffStage({
     setStatusMsg(msg);
     setStatusKind(kind);
   };
+
+  const { remaining: diffRemaining, ref: diffResultRef, skip: diffSkip } = useStageAutoAdvance(
+    diffResult !== null,
+    () => dispatch({ type: 'ADVANCE_STAGE', from: 'diff' }),
+  );
 
   const run = async () => {
     if (!base.trim() || !target.trim()) {
@@ -92,7 +98,7 @@ export function DiffStage({
 
       {/* Stage guidance */}
       <div className="stage-guidance">
-        <span className="stage-guidance-step">Step 4</span>
+        <span className="stage-guidance-step">Step 3</span>
         Compare the original and injected ISOs to see exactly what changed — added, removed, and modified files.
       </div>
 
@@ -106,10 +112,10 @@ export function DiffStage({
 
         <div className="field-grid" style={{ marginBottom: 'var(--sp-4)' }}>
           <Field label="Base ISO path">
-            <TextInput value={base} onChange={setBase} placeholder="/path/to/original.iso" disabled={isRunning} />
+            <FileInput value={base} onChange={setBase} placeholder="/path/to/original.iso" disabled={isRunning} mode="iso" />
           </Field>
           <Field label="Target ISO path">
-            <TextInput value={target} onChange={setTarget} placeholder="/path/to/modified.iso" disabled={isRunning} />
+            <FileInput value={target} onChange={setTarget} placeholder="/path/to/modified.iso" disabled={isRunning} mode="iso" />
           </Field>
         </div>
 
@@ -199,14 +205,20 @@ export function DiffStage({
             </div>
           </div>
 
-          <div className="btn-group btn-group-right">
-            <button
-              className="btn btn-primary"
-              type="button"
-              onClick={() => dispatch({ type: 'ADVANCE_STAGE', from: 'diff' })}
-            >
-              Continue to Completion →
-            </button>
+          <div className="card card-green" ref={diffResultRef}>
+            <div className="card-header">
+              <h2>✓ Diff Complete</h2>
+            </div>
+            <div className="wizard-advance-row">
+              {diffRemaining !== null && (
+                <span className="wizard-countdown">
+                  Continuing to Build in {diffRemaining}s…
+                </span>
+              )}
+              <button className="btn btn-primary btn-lg" type="button" onClick={diffSkip}>
+                Continue to Build →
+              </button>
+            </div>
           </div>
         </>
       )}

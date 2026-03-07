@@ -383,6 +383,7 @@ button, input, select, textarea { font: inherit; }
 .log-line.info  .log-msg { color: var(--text-secondary); }
 .log-line.debug .log-msg { color: var(--text-muted); }
 .log-empty { color: var(--text-muted); padding: var(--sp-2) 0; font-style: italic; }
+.log-filter-active { border-color: var(--blue-light) !important; color: var(--blue-light) !important; }
 
 /* ── Cards and panels ────────────────────────────────────────────────────────── */
 .card {
@@ -449,26 +450,47 @@ button, input, select, textarea { font: inherit; }
   gap: var(--sp-2);
 }
 
-.progress-bar-track {
-  height: 6px;
-  background: var(--bg-hover);
-  border-radius: var(--r-pill);
-  overflow: hidden;
-  margin-bottom: var(--sp-2);
+/* ── Pipe-style progress bar  |████████░░░░| 55% ─────────────────────────── */
+.pipe-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1;
+  margin: var(--sp-2) 0;
+  user-select: none;
+  white-space: nowrap;
 }
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue-solid), var(--blue-light));
-  border-radius: var(--r-pill);
-  transition: width 0.4s ease;
+.pipe-bracket     { color: var(--text-secondary); }
+.pipe-filled      { color: var(--blue-light); letter-spacing: -0.5px; }
+.pipe-empty       { color: var(--bg-active); letter-spacing: -0.5px; }
+.pipe-indeterminate { color: var(--blue-dim); letter-spacing: -0.5px; }
+.pipe-pct {
+  color: var(--text-primary);
+  font-weight: 700;
+  margin-left: var(--sp-3);
+  min-width: 36px;
 }
-.progress-bar-indeterminate {
-  width: 40%;
-  animation: indeterminate-slide 1.5s ease-in-out infinite;
+.pipe-pct-working { color: var(--text-muted); letter-spacing: 2px; }
+.pipe-bytes {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  margin-left: var(--sp-3);
 }
-@keyframes indeterminate-slide {
-  0%   { transform: translateX(-150%); }
-  100% { transform: translateX(350%); }
+
+/* ── Wizard step advance row ─────────────────────────────────────────────── */
+.wizard-advance-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
+}
+.wizard-countdown {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .progress-meta {

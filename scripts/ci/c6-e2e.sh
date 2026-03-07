@@ -32,7 +32,11 @@ else
   echo '{"nested_virtualization":"unavailable"}' > artifacts/e2e/virt.json
 fi
 
-if command -v qemu-system-x86_64 >/dev/null 2>&1 && { command -v grub2-mkrescue >/dev/null 2>&1 || command -v grub-mkrescue >/dev/null 2>&1; }; then
+# QEMU boot smoke test: requires qemu, grub-mkrescue, AND /dev/kvm (hardware accel).
+# Without KVM the guest runs in software emulation — too slow for CI time limits.
+if command -v qemu-system-x86_64 >/dev/null 2>&1 \
+    && { command -v grub2-mkrescue >/dev/null 2>&1 || command -v grub-mkrescue >/dev/null 2>&1; } \
+    && [ -e /dev/kvm ]; then
   smoke_dir="artifacts/e2e/smoke"
   clean_path "$smoke_dir/out"
   eval "$(scripts/test/make-smoke-iso.sh "$smoke_dir")"
@@ -52,4 +56,6 @@ if command -v qemu-system-x86_64 >/dev/null 2>&1 && { command -v grub2-mkrescue 
 
   grep -q 'FORGEISO_SMOKE_START' "$smoke_dir/out/test/bios-serial.log"
   grep -q 'FORGEISO_SMOKE_START' "$smoke_dir/out/test/uefi-serial.log"
+else
+  echo "Skipping QEMU boot smoke test (no KVM or tools unavailable)" >&2
 fi

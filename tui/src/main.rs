@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::{
@@ -16,27 +17,96 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Row, Table},
     Terminal,
 };
+use tokio::sync::mpsc;
+
+// Messages sent from background tasks back to the UI loop.
+enum WorkerMsg {
+    InspectOk(Box<forgeiso_engine::IsoMetadata>),
+    BuildOk(Box<forgeiso_engine::BuildResult>),
+    ScanOk(String),
+    TestOk(bool),
+    OpError(String),
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Restore terminal on panic so the user doesn't get a broken shell.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let engine = ForgeIsoEngine::new();
+    let engine = Arc::new(ForgeIsoEngine::new());
     let mut app = App::new(engine.doctor().await);
-    let mut rx = engine.subscribe();
+    let mut rx_events = engine.subscribe();
+
+    let (tx, mut rx_worker) = mpsc::unbounded_channel::<WorkerMsg>();
 
     loop {
-        while let Ok(event) = rx.try_recv() {
-            app.push_log(format!("[{:?}] {}", event.phase, event.message));
+        // Drain engine broadcast events (progress logs).
+        while let Ok(ev) = rx_events.try_recv() {
+            app.push_log(format!("[{:?}] {}", ev.phase, ev.message));
+        }
+
+        // Drain worker results.
+        while let Ok(msg) = rx_worker.try_recv() {
+            app.busy = false;
+            match msg {
+                WorkerMsg::InspectOk(info) => {
+                    app.inspection = vec![
+                        format!("Source: {}", info.source_path.display()),
+                        format!(
+                            "Distro: {}",
+                            info.distro
+                                .map(|d| format!("{d:?}"))
+                                .unwrap_or_else(|| "unknown".into())
+                        ),
+                        format!("Release: {}", info.release.as_deref().unwrap_or("unknown")),
+                        format!(
+                            "Arch: {}",
+                            info.architecture.as_deref().unwrap_or("unknown")
+                        ),
+                        format!("Volume: {}", info.volume_id.as_deref().unwrap_or("unknown")),
+                    ];
+                    app.status = "Inspection completed".into();
+                }
+                WorkerMsg::BuildOk(result) => {
+                    app.last_iso = result.artifacts.first().cloned();
+                    let label = result
+                        .artifacts
+                        .first()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| result.output_dir.display().to_string());
+                    app.inspection = vec![
+                        format!("Built ISO: {label}"),
+                        format!("Report JSON: {}", result.report_json.display()),
+                        format!("Report HTML: {}", result.report_html.display()),
+                    ];
+                    app.status = format!("Build completed: {label}");
+                }
+                WorkerMsg::ScanOk(path) => {
+                    app.status = format!("Scan completed: {path}");
+                }
+                WorkerMsg::TestOk(passed) => {
+                    app.status = format!("Test completed: passed={passed}");
+                }
+                WorkerMsg::OpError(e) => {
+                    app.status = format!("Error: {e}");
+                }
+            }
         }
 
         terminal.draw(|f| ui(f, &app))?;
 
-        if event::poll(Duration::from_millis(150))? {
+        if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
@@ -56,10 +126,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Up => app.previous_field(),
                     KeyCode::Down => app.next_field(),
                     KeyCode::Enter => app.editing = true,
-                    KeyCode::Char('i') => app.inspect(&engine).await,
-                    KeyCode::Char('b') => app.build(&engine).await,
-                    KeyCode::Char('s') => app.scan(&engine).await,
-                    KeyCode::Char('t') => app.test(&engine).await,
+                    KeyCode::Char('i') if !app.busy => {
+                        app.spawn_inspect(Arc::clone(&engine), tx.clone());
+                    }
+                    KeyCode::Char('b') if !app.busy => {
+                        app.spawn_build(Arc::clone(&engine), tx.clone());
+                    }
+                    KeyCode::Char('s') if !app.busy => {
+                        app.spawn_scan(Arc::clone(&engine), tx.clone());
+                    }
+                    KeyCode::Char('t') if !app.busy => {
+                        app.spawn_test(Arc::clone(&engine), tx.clone());
+                    }
                     _ => {}
                 }
             }
@@ -75,6 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct App {
     selected_field: usize,
     editing: bool,
+    busy: bool,
     source: String,
     output_dir: String,
     build_name: String,
@@ -100,6 +179,7 @@ impl App {
         Self {
             selected_field: 0,
             editing: false,
+            busy: false,
             source: String::new(),
             output_dir: "/tmp/forgeoutput".to_string(),
             build_name: "forgeiso-local".to_string(),
@@ -159,105 +239,81 @@ impl App {
         }
     }
 
-    async fn inspect(&mut self, engine: &ForgeIsoEngine) {
+    fn spawn_inspect(&mut self, engine: Arc<ForgeIsoEngine>, tx: mpsc::UnboundedSender<WorkerMsg>) {
         if self.source.trim().is_empty() {
-            self.status = "Source is required".to_string();
+            self.status = "Source is required".into();
             return;
         }
-        match engine.inspect_source(&self.source, None).await {
-            Ok(info) => {
-                self.inspection = vec![
-                    format!("Source path: {}", info.source_path.display()),
-                    format!(
-                        "Distro: {}",
-                        info.distro
-                            .map(|value| format!("{:?}", value))
-                            .unwrap_or_else(|| "unknown".to_string())
-                    ),
-                    format!("Release: {}", info.release.as_deref().unwrap_or("unknown")),
-                    format!(
-                        "Architecture: {}",
-                        info.architecture.as_deref().unwrap_or("unknown")
-                    ),
-                    format!(
-                        "Volume ID: {}",
-                        info.volume_id.as_deref().unwrap_or("unknown")
-                    ),
-                ];
-                self.status = "Inspection completed".to_string();
-            }
-            Err(error) => {
-                self.status = format!("Inspect failed: {error}");
-            }
-        }
+        self.busy = true;
+        self.status = "Inspecting…".into();
+        let source = self.source.clone();
+        tokio::spawn(async move {
+            let msg = match engine.inspect_source(&source, None).await {
+                Ok(info) => WorkerMsg::InspectOk(Box::new(info)),
+                Err(e) => WorkerMsg::OpError(format!("Inspect failed: {e}")),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
-    async fn build(&mut self, engine: &ForgeIsoEngine) {
+    fn spawn_build(&mut self, engine: Arc<ForgeIsoEngine>, tx: mpsc::UnboundedSender<WorkerMsg>) {
         let cfg = match self.build_config() {
             Ok(cfg) => cfg,
-            Err(error) => {
-                self.status = error;
+            Err(e) => {
+                self.status = e;
                 return;
             }
         };
+        self.busy = true;
+        self.status = "Building…".into();
         let out_dir = PathBuf::from(&self.output_dir);
-        match engine.build(&cfg, &out_dir).await {
-            Ok(result) => {
-                self.last_iso = result.artifacts.first().cloned();
-                let iso_label = result
-                    .artifacts
-                    .first()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| result.output_dir.display().to_string());
-                self.status = format!("Build completed: {iso_label}");
-                self.inspection = vec![
-                    format!("Built ISO: {iso_label}"),
-                    format!("Report JSON: {}", result.report_json.display()),
-                    format!("Report HTML: {}", result.report_html.display()),
-                ];
-            }
-            Err(error) => {
-                self.status = format!("Build failed: {error}");
-            }
-        }
+        tokio::spawn(async move {
+            let msg = match engine.build(&cfg, &out_dir).await {
+                Ok(r) => WorkerMsg::BuildOk(Box::new(r)),
+                Err(e) => WorkerMsg::OpError(format!("Build failed: {e}")),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
-    async fn scan(&mut self, engine: &ForgeIsoEngine) {
+    fn spawn_scan(&mut self, engine: Arc<ForgeIsoEngine>, tx: mpsc::UnboundedSender<WorkerMsg>) {
         let Some(artifact) = self.last_iso.clone() else {
-            self.status = "Build an ISO before running scan".to_string();
+            self.status = "Build an ISO before running scan".into();
             return;
         };
+        self.busy = true;
+        self.status = "Scanning…".into();
         let out = artifact
             .parent()
-            .map(|path| path.join("scan"))
+            .map(|p| p.join("scan"))
             .unwrap_or_else(|| PathBuf::from("scan"));
-        match engine.scan(&artifact, None, &out).await {
-            Ok(result) => {
-                self.status = format!("Scan completed: {}", result.report_json.display());
-            }
-            Err(error) => {
-                self.status = format!("Scan failed: {error}");
-            }
-        }
+        tokio::spawn(async move {
+            let msg = match engine.scan(&artifact, None, &out).await {
+                Ok(r) => WorkerMsg::ScanOk(r.report_json.display().to_string()),
+                Err(e) => WorkerMsg::OpError(format!("Scan failed: {e}")),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
-    async fn test(&mut self, engine: &ForgeIsoEngine) {
+    fn spawn_test(&mut self, engine: Arc<ForgeIsoEngine>, tx: mpsc::UnboundedSender<WorkerMsg>) {
         let Some(artifact) = self.last_iso.clone() else {
-            self.status = "Build an ISO before running tests".to_string();
+            self.status = "Build an ISO before running tests".into();
             return;
         };
+        self.busy = true;
+        self.status = "Testing…".into();
         let out = artifact
             .parent()
-            .map(|path| path.join("test"))
+            .map(|p| p.join("test"))
             .unwrap_or_else(|| PathBuf::from("test"));
-        match engine.test_iso(&artifact, true, true, &out).await {
-            Ok(result) => {
-                self.status = format!("Test completed: passed={}", result.passed);
-            }
-            Err(error) => {
-                self.status = format!("Test failed: {error}");
-            }
-        }
+        tokio::spawn(async move {
+            let msg = match engine.test_iso(&artifact, true, true, &out).await {
+                Ok(r) => WorkerMsg::TestOk(r.passed),
+                Err(e) => WorkerMsg::OpError(format!("Test failed: {e}")),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
     fn build_config(&self) -> Result<BuildConfig, String> {
@@ -317,12 +373,13 @@ fn ui(frame: &mut ratatui::Frame<'_>, app: &App) {
         })
         .collect::<Vec<_>>();
 
+    let form_title = if app.busy {
+        "Local Build Form [busy…]"
+    } else {
+        "Local Build Form"
+    };
     let table = Table::new(rows, [Constraint::Length(10), Constraint::Min(30)])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Local Build Form"),
-        )
+        .block(Block::default().borders(Borders::ALL).title(form_title))
         .row_highlight_style(Style::default().bold());
     frame.render_widget(table, chunks[0]);
 

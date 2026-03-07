@@ -195,6 +195,7 @@ export type InjectState = {
   extraLateCommands: string;
   noUserInteraction: boolean;
   distro: string;
+  wallpaperPath: string;
 };
 
 export const defaultInjectState: InjectState = {
@@ -216,6 +217,7 @@ export const defaultInjectState: InjectState = {
   mounts: '', packages: 'curl\ngit\nvim', aptRepos: '',
   runCommands: '', extraLateCommands: '', noUserInteraction: true,
   distro: 'ubuntu',
+  wallpaperPath: '',
 };
 
 // ── Inject preset templates ───────────────────────────────────────────────────

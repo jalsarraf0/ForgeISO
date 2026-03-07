@@ -110,6 +110,10 @@ enum Commands {
         ssh_key_file: Vec<PathBuf>,
         #[arg(long)]
         ssh_password_auth: bool,
+        #[arg(long)]
+        ssh_install_server: bool,
+        #[arg(long)]
+        no_ssh_install_server: bool,
 
         // Network
         #[arg(long, action = clap::ArgAction::Append)]
@@ -445,6 +449,8 @@ async fn main() -> anyhow::Result<()> {
             ssh_key,
             ssh_key_file,
             ssh_password_auth,
+            ssh_install_server,
+            no_ssh_install_server,
             dns,
             ntp_server,
             timezone,
@@ -547,7 +553,13 @@ async fn main() -> anyhow::Result<()> {
                 ssh: SshConfig {
                     authorized_keys: all_ssh_keys,
                     allow_password_auth: if ssh_password_auth { Some(true) } else { None },
-                    install_server: None,
+                    install_server: if ssh_install_server {
+                        Some(true)
+                    } else if no_ssh_install_server {
+                        Some(false)
+                    } else {
+                        None
+                    },
                 },
                 network: NetworkConfig {
                     dns_servers: dns,

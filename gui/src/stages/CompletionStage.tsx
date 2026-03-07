@@ -178,11 +178,17 @@ export function CompletionStage({
 
       {/* Actions */}
       <div className="completion-actions">
-        <button className="btn btn-ghost" type="button" onClick={() => dispatch({ type: 'SET_STAGE', stage: 'build' })}>
-          ← Back to Build
-        </button>
         <button className="btn btn-ghost" type="button" onClick={() => dispatch({ type: 'SET_STAGE', stage: 'inject' })}>
           ← Back to Inject
+        </button>
+        <button className="btn btn-ghost" type="button" onClick={() => dispatch({ type: 'SET_STAGE', stage: 'verify' })}>
+          ← Back to Verify
+        </button>
+        <button className="btn btn-ghost" type="button" onClick={() => dispatch({ type: 'SET_STAGE', stage: 'diff' })}>
+          ← Back to Diff
+        </button>
+        <button className="btn btn-ghost" type="button" onClick={() => dispatch({ type: 'SET_STAGE', stage: 'build' })}>
+          ← Back to Build
         </button>
         <button className="btn btn-danger" type="button" onClick={resetAll}>
           Start New Pipeline

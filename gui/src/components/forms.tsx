@@ -74,6 +74,60 @@ export function TextArea({
   );
 }
 
+// ── File path input with native OS browse button ──────────────────────────────
+
+type PickMode = 'iso' | 'folder' | 'file';
+
+export function FileInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  mode = 'iso',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  mode?: PickMode;
+}) {
+  const [picking, setPicking] = useState(false);
+
+  const browse = async () => {
+    setPicking(true);
+    try {
+      const cmd = mode === 'folder' ? 'pick_folder' : mode === 'file' ? 'pick_file' : 'pick_iso_file';
+      const result = await invoke<string | null>(cmd);
+      if (result) onChange(result);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        onClick={browse}
+        disabled={disabled || picking}
+        title="Browse…"
+        style={{ flexShrink: 0, padding: '4px 10px', whiteSpace: 'nowrap' }}
+      >
+        {picking ? '…' : '📂 Browse'}
+      </button>
+    </div>
+  );
+}
+
 // ── Toggle / checkbox ─────────────────────────────────────────────────────────
 
 export function Toggle({
@@ -141,6 +195,7 @@ export function Accordion({
 // ── useAccordion hook ─────────────────────────────────────────────────────────
 
 import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 export function useAccordion(initial: string[] = []) {
   const [open, setOpen] = useState(new Set(initial));

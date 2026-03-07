@@ -53,7 +53,7 @@ export function LogPanel({
           {(['all', 'info', 'warn', 'error'] as const).map((f) => (
             <button
               key={f}
-              className={`btn btn-ghost btn-sm${filter === f ? ' btn-sm' : ''}`}
+              className={`btn btn-ghost btn-sm${filter === f ? ' log-filter-active' : ''}`}
               style={{
                 color: filter === f
                   ? f === 'error' ? 'var(--red-light)'
