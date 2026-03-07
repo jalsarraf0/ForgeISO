@@ -1,4 +1,13 @@
 services:
+  c2:
+    build:
+      context: .
+      dockerfile: containers/C2.sbom.Dockerfile
+    command: ["bash", "-c", "scripts/ci/c2-sbom.sh"]
+    volumes:
+      - .:/workspace
+    environment:
+      - CI=true
   c1:
     build:
       context: .

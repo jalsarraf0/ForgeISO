@@ -16,20 +16,20 @@ Download the latest release from the **[Releases page](https://github.com/jalsar
 
 ### Fedora · RHEL · openSUSE
 ```bash
-sudo rpm -ivh forgeiso-0.3.1-1.x86_64.rpm
+sudo rpm -ivh forgeiso-0.3.2-1.x86_64.rpm
 ```
 
 ### Debian · Ubuntu · Linux Mint
 ```bash
-sudo dpkg -i forgeiso_0.3.1-1_amd64.deb
+sudo dpkg -i forgeiso_0.3.2-1_amd64.deb
 sudo apt-get install -f        # resolve xorriso, squashfs-tools, mtools if missing
 ```
 
 ### Any x86-64 Linux (tarball)
 ```bash
-tar -xzf forgeiso-0.3.1-linux-x86_64.tar.gz
-sudo install -m755 forgeiso-0.3.1-linux-x86_64/bin/forgeiso /usr/local/bin/
-sudo install -m755 forgeiso-0.3.1-linux-x86_64/bin/forgeiso-tui /usr/local/bin/
+tar -xzf forgeiso-0.3.2-linux-x86_64.tar.gz
+sudo install -m755 forgeiso-0.3.2-linux-x86_64/bin/forgeiso /usr/local/bin/
+sudo install -m755 forgeiso-0.3.2-linux-x86_64/bin/forgeiso-tui /usr/local/bin/
 ```
 
 > **Dependencies:** `xorriso` · `squashfs-tools` · `mtools`

@@ -16,6 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - id: c2
+            label: "C2 SBOM + Audit"
+            dockerfile: containers/C2.sbom.Dockerfile
+            script: scripts/ci/c2-sbom.sh
+            cache: rust
           - id: c1
             label: "C1 Rust"
             dockerfile: containers/C1.rust.Dockerfile
@@ -93,6 +98,8 @@ jobs:
             artifacts/**
             **/build-report.json
             **/build-report.html
+            **/sbom.cdx.json
+            **/sbom.spdx.json
           if-no-files-found: ignore
 
   release:
@@ -117,6 +124,9 @@ jobs:
             mtools \
             xorriso
           sudo gem install fpm --no-document
+          # Install syft for SBOM generation in release artifacts
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sudo sh -s -- -b /usr/local/bin || true
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -146,12 +156,22 @@ jobs:
           rpm -qip forgeiso-*.rpm 2>/dev/null | grep -E "Name|Version|Arch"
           dpkg-deb --info forgeiso_*.deb 2>/dev/null | grep -E "Package|Version|Arch"
 
+      - name: Generate SBOM for release
+        run: |
+          if command -v syft >/dev/null 2>&1; then
+            syft dir:. -o cyclonedx-json > dist/release/sbom.cdx.json
+            syft dir:. -o spdx-json      > dist/release/sbom.spdx.json
+          fi
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/release/forgeiso-*-1.x86_64.rpm
             dist/release/forgeiso_*-1_amd64.deb
+            dist/release/forgeiso-*-1-x86_64.pkg.tar.zst
             dist/release/forgeiso-*-linux-x86_64.tar.gz
             dist/release/checksums.txt
+            dist/release/sbom.cdx.json
+            dist/release/sbom.spdx.json
           generate_release_notes: false

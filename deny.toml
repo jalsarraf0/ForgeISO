@@ -1,0 +1,78 @@
+# cargo-deny 0.19 configuration for ForgeISO
+# Enforces: license compliance, no known CVEs, no banned crates.
+# Ref: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+]
+
+# ── Advisories ───────────────────────────────────────────────────────────────
+# Any unignored vulnerability advisory causes a build failure.
+# Unmaintained-only advisories (no vulnerability, just abandoned) are ignored
+# when no safe upgrade is available; they must be tracked in project issues.
+[advisories]
+ignore = [
+    # number_prefix: unmaintained, no vulnerability, no upgrade path (indicatif dep)
+    # Tracked: swap indicatif for a maintained alternative when available.
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix is unmaintained but has no vulnerability; indicatif has no safe upgrade path yet" },
+
+    # paste: unmaintained, no vulnerability, pulled in by ratatui
+    # Tracked: update ratatui when a version dropping paste is released.
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained but has no vulnerability; ratatui has no safe upgrade path yet" },
+]
+
+# ── Licenses ─────────────────────────────────────────────────────────────────
+[licenses]
+confidence-threshold = 0.8
+
+# Only permissive licenses allowed. Copyleft (GPL/LGPL/AGPL) → fail.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+    "OpenSSL",
+    # Community Data License Agreement Permissive 2.0 (used by webpki-roots)
+    "CDLA-Permissive-2.0",
+]
+
+# ring uses a compound OpenSSL + ISC + MIT license in its source tree
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+[licenses.private]
+# Workspace-only crates (not published) are excluded from license checks
+ignore = true
+
+# ── Bans ─────────────────────────────────────────────────────────────────────
+[bans]
+multiple-versions = "warn"
+# Path dependencies within the workspace have no version spec — that's fine.
+wildcards = "allow"
+
+# Duplicate-version skips for known ecosystem splits
+skip = [
+    { crate = "crossterm",    reason = "ratatui 0.29 pulls crossterm 0.28, we use 0.29 directly" },
+    { crate = "getrandom",    reason = "rand 0.8 uses getrandom 0.2, newer crates use 0.4" },
+    { crate = "linux-raw-sys", reason = "crossterm 0.28 pulls rustix 0.38 which uses 0.4.x" },
+    { crate = "rustix",       reason = "crossterm 0.28 (via ratatui) pulls rustix 0.38" },
+    { crate = "unicode-width", reason = "ratatui + indicatif use different unicode-width versions" },
+]
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
